@@ -83,7 +83,7 @@ export function createDemoBackend(initial) {
   on('POST', '/homework-templates', ({ tid, body }) => { const title = str(body.title, 60); if (!title) throw bad('請輸入功課名稱'); addTemplate(tid, title, str(body.subject, 20)); return listTemplates(tid); });
   on('DELETE', '/homework-templates/:id', ({ tid, p }) => { own('homework_templates', p.id, tid); S.homework_templates = S.homework_templates.filter(t => t.id !== p.id); return listTemplates(tid); });
   on('GET', '/classes', ({ tid }) => listClasses(tid));
-  on('POST', '/classes', ({ tid, body }) => { const name = str(body.name, 30); if (!name) throw bad('請輸入班別名稱'); return clone(insert('classes', { teacher_id: tid, name, school_year: str(body.school_year, 20) })); });
+  on('POST', '/classes', ({ tid, body }) => { const name = str(body.name, 30); if (!name) throw bad('請輸入班別名稱'); return clone(insert('classes', { teacher_id: tid, name, school_year: str(body.school_year, 20), seat_cols: 6 })); });
   on('PATCH', '/classes/:id', ({ tid, p, body }) => { const c = own('classes', p.id, tid); c.name = str(body.name ?? c.name, 30) || c.name; c.school_year = str(body.school_year ?? c.school_year, 20); return clone(c); });
   on('DELETE', '/classes/:id', ({ tid, p }) => {
     own('classes', p.id, tid);
@@ -95,6 +95,29 @@ export function createDemoBackend(initial) {
   });
   on('GET', '/classes/:id/full', ({ tid, p }) => { const c = own('classes', p.id, tid); return { class: clone(c), students: studentsOf(c.id), groups: clone(S.groups.filter(g => g.class_id === c.id)) }; });
 
+  on('PUT', '/classes/:id/seats', ({ tid, p, body }) => {
+    const c = own('classes', p.id, tid);
+    const cols = body.cols === undefined ? c.seat_cols : int(body.cols);
+    if (!(cols >= 2 && cols <= 12)) throw bad('每行座位數須為 2 至 12');
+    const seats = Array.isArray(body.seats) ? body.seats : [];
+    const used = new Set();
+    for (const st of seats) {
+      const r = int(st.row); const col = int(st.col);
+      if (!(r >= 0 && r < 30 && col >= 0 && col < cols)) throw bad('座位位置不正確');
+      const key = `${r},${col}`; if (used.has(key)) throw bad('同一個座位不可坐兩位學生'); used.add(key);
+    }
+    txn(() => {
+      c.seat_cols = cols;
+      S.students.filter(s => s.class_id === c.id).forEach(s => { s.seat_row = null; s.seat_col = null; });
+      for (const st of seats) {
+        const s = own('students', int(st.student_id), tid);
+        if (s.class_id !== c.id) throw bad('學生不屬於此班');
+        s.seat_row = int(st.row); s.seat_col = int(st.col);
+      }
+    });
+    return { class: clone(c), students: studentsOf(c.id), groups: clone(S.groups.filter(g => g.class_id === c.id)) };
+  });
+
   on('POST', '/classes/:id/students', ({ tid, p, body }) => {
     const c = own('classes', p.id, tid); const list = Array.isArray(body.students) ? body.students : [];
     if (!list.length) throw bad('沒有學生資料'); if (list.length > 60) throw bad('一次最多匯入 60 名學生');
@@ -105,7 +128,7 @@ export function createDemoBackend(initial) {
         const number = raw.number === '' || raw.number == null ? null : int(raw.number);
         const score = raw.score === '' || raw.score == null ? 0 : int(raw.score);
         if (Number.isNaN(number) || Number.isNaN(score)) throw bad(`「${name}」的班號或分數不是整數`);
-        const s = insert('students', { teacher_id: tid, class_id: c.id, number, name, group_id: null, score });
+        const s = insert('students', { teacher_id: tid, class_id: c.id, number, name, group_id: null, score, seat_row: null, seat_col: null });
         if (score) insert('score_events', { teacher_id: tid, class_id: c.id, student_id: s.id, batch_id: null, kind: 'import', delta: score, tag_id: null, reason: '保留舊分數（匯入）', undone_at: null });
         created.push(studentFull(s.id));
       }

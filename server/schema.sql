@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS classes (
   teacher_id  INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
   name        TEXT NOT NULL,               -- 例如 4A
   school_year TEXT NOT NULL DEFAULT '',
+  seat_cols   INTEGER NOT NULL DEFAULT 6,   -- 座位表每行座位數
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
@@ -45,6 +46,8 @@ CREATE TABLE IF NOT EXISTS students (
   name        TEXT NOT NULL,
   group_id    INTEGER REFERENCES groups(id) ON DELETE SET NULL,
   score       INTEGER NOT NULL DEFAULT 0,  -- 由 score_events 計出的總分（快取）
+  seat_row    INTEGER,                     -- 座位表位置（由前排 0 起）；NULL = 未編位
+  seat_col    INTEGER,
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_students_class ON students(class_id);

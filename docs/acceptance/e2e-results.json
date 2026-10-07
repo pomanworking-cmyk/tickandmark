@@ -37,7 +37,7 @@
  [
   "4A 平均派蛋（八款中每款 1–2 隻）",
   true,
-  "['earth_bear', 'earth_bear', 'fire_fox', 'metal_bird', 'metal_bird', 'metal_cat', 'metal_cat', 'water_koi', 'water_otter', 'water_otter', 'wood_deer', 'wood_rabbit']"
+  "['earth_bear', 'earth_bear', 'fire_fox', 'fire_fox', 'metal_bird', 'metal_bird', 'metal_cat', 'metal_cat', 'water_koi', 'water_otter', 'wood_deer', 'wood_rabbit']"
  ],
  [
   "4B 第一位資料是土熊蛋",
@@ -75,9 +75,9 @@
   "5→5 baby"
  ],
  [
-  "扣分沒有彈出祝賀",
+  "扣分彈出簡短確認（無彩紙），顯示自己寵物",
   true,
-  ""
+  "{\"d\": \"-2\", \"sp\": \"earth_bear\", \"st\": \"baby\"}"
  ],
  [
   "撤銷：XP 扣回 5，土熊仍是寶寶（不倒退）",
@@ -86,6 +86,61 @@
  ],
  [
   "同一筆加分重送不會重複計算",
+  true,
+  ""
+ ],
+ [
+  "一撳即加：沒有選單，直接 +2 並彈出",
+  true,
+  "{\"d\": \"+2\", \"sp\": \"metal_bird\", \"st\": \"egg\"}"
+ ],
+ [
+  "一撳即加：彈窗寵物與資料庫一致，XP +2",
+  true,
+  ""
+ ],
+ [
+  "彈窗仍在畫面",
+  true,
+  ""
+ ],
+ [
+  "彈窗未關都可以連續撳下一位",
+  true,
+  ""
+ ],
+ [
+  "一撳即扣 -1",
+  true,
+  ""
+ ],
+ [
+  "一撳即用行為標籤",
+  true,
+  "🤝 幫助同學"
+ ],
+ [
+  "拖動學生到空位並儲存",
+  true,
+  "2,5 應為 2,5"
+ ],
+ [
+  "先點後點：兩位學生交換座位",
+  true,
+  "0,2 / 0,1"
+ ],
+ [
+  "每行座位數可調整",
+  true,
+  ""
+ ],
+ [
+  "重新載入後座位保持",
+  true,
+  "[2, 5]"
+ ],
+ [
+  "4B 座位表模式：10 個頭像與資料庫一致",
   true,
   ""
  ],
@@ -122,7 +177,7 @@
  [
   "4A 馮凱琳 成長路線只顯示自己的品種",
   true,
-  "{'water_otter'}"
+  "{'earth_bear'}"
  ],
  [
   "4B 課室模式：10 個頭像與資料庫一致",
@@ -147,7 +202,7 @@
  [
   "4B 馬詩韻 成長路線只顯示自己的品種",
   true,
-  "{'wood_rabbit'}"
+  "{'water_koi'}"
  ],
  [
   "4B 學生資料頁 許俊傑：1 個頭像與資料庫一致",
@@ -212,7 +267,7 @@
  [
   "功課提交紀錄",
   true,
-  "{'id': 1, 'teacher_id': 1, 'class_id': 1, 'title': '周記', 'subject': '中文', 'due_date': '2026-10-15', 'created_at': '2026-10-07T11:49:56.920Z', 'submitted': 11, 'late': 0, 'missing': 1, 'excused': 0}"
+  "{'id': 1, 'teacher_id': 1, 'class_id': 1, 'title': '周記', 'subject': '中文', 'due_date': '2026-10-15', 'created_at': '2026-10-07T12:35:49.082Z', 'submitted': 11, 'late': 0, 'missing': 1, 'excused': 0}"
  ],
  [
   "考試成績平均",

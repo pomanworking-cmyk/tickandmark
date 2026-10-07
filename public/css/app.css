@@ -397,3 +397,52 @@ dialog.full .sheet { background: var(--bg); background-image: radial-gradient(#f
 .tpl .del:hover { opacity: 1; color: var(--bad); }
 .check { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--muted); }
 .check input { width: 18px; height: 18px; accent-color: var(--accent-strong); }
+
+/* 祝賀畫面不阻擋背景，可以連續撳學生 */
+.celebrate { pointer-events: none; }
+.celebrate .cele-card { pointer-events: auto; cursor: pointer; }
+.celebrate.minus { background: rgba(255, 236, 241, .35); }
+.cele-card.minus { background: #fff; border-color: var(--bad-soft); width: min(300px, 100%); padding: 18px 22px; }
+.cele-card.minus .avatar img { animation: none; filter: saturate(.8); }
+.cele-card.minus .delta { color: var(--bad); font-size: 2.4rem; animation: shake .4s; }
+@keyframes shake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+
+/* 快速給分列 */
+.quick-bar { display: flex; gap: 8px; align-items: center; overflow-x: auto; padding: 2px 2px 8px; margin-bottom: 6px; scrollbar-width: thin; }
+.quick-bar .qlabel { font-weight: 800; color: var(--muted); white-space: nowrap; font-size: .9rem; }
+.quick-bar.editing { flex-wrap: wrap; background: var(--lav-soft); border: 2px dashed var(--lav); border-radius: 22px; padding: 8px 12px; }
+.quick-bar.editing .qlabel { white-space: normal; color: #5b47a0; flex: 1 1 260px; }
+.qchip { flex: none; border: 2px solid var(--line); background: #fff; border-radius: 999px; padding: 6px 14px; font: inherit; font-weight: 700; color: var(--ink); cursor: pointer; white-space: nowrap; min-height: 40px; }
+.qchip.pos b { color: var(--good); } .qchip.neg b { color: var(--bad); }
+.qchip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent-strong); color: var(--accent-ink); box-shadow: 0 3px 0 #f5a0b7; transform: translateY(-1px); }
+.qchip[aria-pressed="true"] b { color: inherit; }
+.qchip[aria-pressed="true"].neg { background: var(--bad-soft); border-color: var(--bad); color: #9c2f48; box-shadow: 0 3px 0 #f7b5c4; }
+
+/* 座位表 */
+.seat-scroll { overflow-x: auto; padding-bottom: 8px; }
+.seat-board { width: max-content; min-width: 100%; }
+.seat-board .front { width: min(320px, 70%); margin: 0 auto 14px; text-align: center; background: var(--mint); color: #2d6b52; font-weight: 800; border-radius: 0 0 22px 22px; padding: 6px 12px; letter-spacing: .2em; }
+.seats { display: grid; grid-template-columns: repeat(var(--cols), var(--card)); gap: 12px; justify-content: safe center; }
+.seat-empty { min-height: calc(var(--card) * 1.02); border: 2px dashed var(--line); border-radius: 26px; background: rgba(255, 255, 255, .45); }
+.seats.editing .stu { cursor: grab; touch-action: none; }
+.seats.editing .seat-empty { border-color: var(--lav); cursor: pointer; }
+.seats.editing .stu.picked { border-color: var(--lav); background: var(--lav-soft); animation: wiggle .9s ease-in-out infinite; }
+@keyframes wiggle { 25% { transform: rotate(-2deg); } 75% { transform: rotate(2deg); } }
+.stu.dragging { opacity: .3; }
+.drop-over { outline: 3px solid var(--accent-strong); outline-offset: 2px; background: var(--accent-soft) !important; }
+.drag-ghost { position: fixed; z-index: 100; pointer-events: none; transform: rotate(3deg) scale(1.05); box-shadow: 0 16px 34px rgba(240, 130, 165, .35); opacity: .95; }
+
+/* 手機：座位表縮細，全班一眼看得到 */
+@media (max-width: 600px) {
+  .seat-board { width: 100%; }
+  .seat-scroll .seats { gap: 6px; grid-template-columns: repeat(var(--cols), minmax(44px, 1fr)); justify-content: start; }
+  .seat-scroll .stu { padding: 15px 2px 6px; border-radius: 16px; gap: 2px; }
+  .seat-scroll .stu .avatar { width: 100%; height: auto; aspect-ratio: 1; }
+  .seat-scroll .stu .nm { font-size: 11px; }
+  .seat-scroll .stu .no { font-size: 10px; top: 2px; left: 6px; }
+  .seat-scroll .stu .sc { font-size: 11px; top: 2px; right: 3px; padding: 0 5px; }
+  .seat-scroll .seat-empty { min-height: 78px; border-radius: 16px; }
+  .seat-board .front { margin-bottom: 8px; padding: 4px 10px; font-size: .85rem; }
+}
+/* 背景只輕輕染色，不模糊，方便老師看清下一位學生 */
+.celebrate { background: rgba(255, 228, 238, .28); backdrop-filter: none; }

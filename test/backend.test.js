@@ -164,6 +164,18 @@ async function scenario(c) {
     const exl = await c.req('GET', `/classes/${classes['4A'].id}/exams`);
     assert.equal(exl[0].avg, 80.25);
 
+    // 座位表：儲存、讀回、改每行座位數；重複座位及他班學生被拒
+    const a4ids = S['4A'].map(s => s.id);
+    const seated = await c.req('PUT', `/classes/${classes['4A'].id}/seats`, { cols: 5, seats: a4ids.map((id, i) => ({ student_id: id, row: Math.floor(i / 5), col: i % 5 })) });
+    assert.equal(seated.class.seat_cols, 5);
+    assert.deepEqual(seated.students.find(x => x.id === a4ids[6]) && [seated.students.find(x => x.id === a4ids[6]).seat_row, seated.students.find(x => x.id === a4ids[6]).seat_col], [1, 1]);
+    await assert.rejects(c.req('PUT', `/classes/${classes['4A'].id}/seats`, { seats: [{ student_id: a4ids[0], row: 0, col: 0 }, { student_id: a4ids[1], row: 0, col: 0 }] }), /同一個座位/);
+    await assert.rejects(c.req('PUT', `/classes/${classes['4A'].id}/seats`, { seats: [{ student_id: S['4B'][0].id, row: 3, col: 3 }] }), /不屬於此班/);
+    await assert.rejects(c.req('PUT', `/classes/${classes['4A'].id}/seats`, { cols: 20, seats: [] }), /2 至 12/);
+    const reread = await c.req('GET', `/classes/${classes['4A'].id}/full`);
+    assert.equal(reread.students.filter(x => x.seat_row !== null).length, 9, '失敗的更改不會影響已儲存座位');
+    L('seats', reread.students.map(x => [x.id, x.seat_row, x.seat_col]));
+
     // 常用功課範本：預設 4 個、新增、重複略過、刪除
     assert.equal(boot.homework_templates.length, 4, '新老師有 4 個預設常用功課');
     let tpl = await c.req('POST', '/homework-templates', { title: '英文閱讀報告', subject: '英文' });
@@ -244,4 +256,22 @@ test('八款 × 五階段圖片全部存在、互不相同', () => {
   assert.throws(() => petImageUrl({ species_key: 'dragon', stage: 'baby' }), /未知品種/);
   assert.throws(() => petImageUrl({ species_key: 'fire_fox', stage: 'super' }), /未知階段/);
   assert.equal(petImageUrl(null), null);
+});
+
+test('舊資料庫自動升級（加入座位欄位）', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const { openDb } = await import('../server/db.js');
+  const os = await import('node:os'); const path = await import('node:path');
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tm-')), 'old.db');
+  const old = new DatabaseSync(file);
+  old.exec(`CREATE TABLE teachers (id INTEGER PRIMARY KEY, email TEXT, name TEXT, password_hash TEXT, created_at TEXT);
+    CREATE TABLE classes (id INTEGER PRIMARY KEY, teacher_id INTEGER, name TEXT, school_year TEXT NOT NULL DEFAULT '', created_at TEXT);
+    CREATE TABLE students (id INTEGER PRIMARY KEY, teacher_id INTEGER, class_id INTEGER, number INTEGER, name TEXT, group_id INTEGER, score INTEGER NOT NULL DEFAULT 0, created_at TEXT);
+    INSERT INTO classes (id, teacher_id, name) VALUES (1, 1, '舊班');`);
+  old.close();
+  const db = openDb(file);
+  const cols = (t) => db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
+  assert.ok(cols('classes').includes('seat_cols') && cols('students').includes('seat_row') && cols('students').includes('seat_col'));
+  assert.equal(db.prepare('SELECT seat_cols FROM classes WHERE id = 1').get().seat_cols, 6);
+  db.close();
 });

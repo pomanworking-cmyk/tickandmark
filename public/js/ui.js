@@ -80,9 +80,9 @@ export function confirmBox(message, { ok = '確定', danger = false } = {}) {
 
 // ---------- 加分祝賀彈窗 ----------
 const stageWord = (from, to) => (from === 'egg' ? '孵化了！' : `進化成${STAGE_LABELS[to]}！`);
-export function celebrate(results, { label, thresholds }) {
+export function celebrate(results, { label, thresholds, quick = false }) {
   const pos = results.filter(r => r.delta > 0);
-  if (!pos.length) return;
+  if (!pos.length) return showDeduction(results, { label, quick });
   document.querySelector('.celebrate')?.remove();
   const el = document.createElement('div'); el.className = 'celebrate'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', '加分');
   let inner;
@@ -118,6 +118,24 @@ export function celebrate(results, { label, thresholds }) {
   }
   requestAnimationFrame(() => requestAnimationFrame(() => { const bar = el.querySelector('[data-to]'); if (bar) bar.style.width = bar.dataset.to + '%'; }));
   const close = () => el.remove();
-  el.addEventListener('click', close);
-  setTimeout(close, pos.length === 1 ? 2600 : 3200);
+  card.addEventListener('click', close); // 背景不阻擋，老師可即時撳下一位學生
+  setTimeout(close, quick ? (pos.length === 1 ? 1900 : 2600) : (pos.length === 1 ? 2600 : 3200));
+}
+
+// 扣分：簡短的確認畫面（不灑彩紙），寵物照常顯示，不會退化
+function showDeduction(results, { label, quick }) {
+  if (!results.length) return;
+  document.querySelector('.celebrate')?.remove();
+  const el = document.createElement('div'); el.className = 'celebrate minus'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', '扣分');
+  const d = results[0].delta;
+  el.innerHTML = results.length === 1
+    ? `<div class="cele-card minus" data-cele-student="${results[0].student_id}">${avatar({ id: results[0].student_id, name: results[0].name, pet: results[0].pet }, 120)}
+        <div class="who">${esc(results[0].name)}</div><div class="delta num">${d}</div><div class="what">${esc(label || '')}</div>
+        <div class="muted small" style="margin-top:6px">現有 ${results[0].score} 分 · 寵物不會因扣分退化</div></div>`
+    : `<div class="cele-card minus" style="width:min(560px,100%)"><div class="delta num">${d}</div><div class="what">${esc(label || '')} · ${results.length} 位同學</div>
+        <div class="cele-multi">${results.map(r => `<div class="m" data-cele-student="${r.student_id}">${avatar({ id: r.student_id, name: r.name, pet: r.pet })}<b>${esc(r.name)}</b></div>`).join('')}</div></div>`;
+  document.body.appendChild(el);
+  const card = el.querySelector('.cele-card'); const close = () => el.remove();
+  card.addEventListener('click', close);
+  setTimeout(close, quick ? 1500 : 2000);
 }

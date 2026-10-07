@@ -10,7 +10,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('tm.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('tm.' + k, JSON.stringify(v)); } catch { /* 私密瀏覽 */ } },
 };
-const room = { q: '', sort: store.get('sort', 'number'), size: store.get('size', 'm'), multi: false, sel: new Set() };
+const room = { q: '', sort: store.get('sort', 'seats'), size: store.get('size', 'm'), multi: false, sel: new Set(), quick: store.get('quick', 'menu'), edit: false, pick: null, justDragged: 0 };
 let ACT = {};
 const go = (h) => { if (location.hash === h) route(); else location.hash = h; };
 const thresholds = () => state.boot?.thresholds;
@@ -65,7 +65,7 @@ async function route() {
     if (!state.boot) state.boot = await GET('/bootstrap');
     if (parts[0] === 'c') {
       const id = Number(parts[1]);
-      if (state.classId !== id || !state.cls) { const full = await GET(`/classes/${id}/full`); if (my !== navSeq) return; state.cls = full; state.classId = id; room.sel.clear(); }
+      if (state.classId !== id || !state.cls) { const full = await GET(`/classes/${id}/full`); if (my !== navSeq) return; state.cls = full; state.classId = id; room.sel.clear(); room.edit = false; room.pick = null; }
       const v = parts[2] || 'room';
       store.set('lastClass', id);
       const views = { room: renderRoom, students: renderStudents, homework: renderHomework, exams: renderExams, history: renderHistory, pets: renderPets, poster: renderPoster };
@@ -139,7 +139,7 @@ function renderHome() {
 }
 
 // ---------- 加減分 ----------
-async function givePoints(ids, { delta, tag, reason }) {
+async function givePoints(ids, { delta, tag, reason, quick = false }) {
   const body = { class_id: state.classId, student_ids: [...ids], client_batch_id: uid(), ...(tag ? { tag_id: tag.id } : { delta, reason }) };
   let res;
   try { res = await POST('/points', body); }
@@ -150,7 +150,7 @@ async function givePoints(ids, { delta, tag, reason }) {
   }
   const label = res.label;
   const d = res.results[0]?.delta ?? 0;
-  if (d > 0) celebrate(res.results, { label, thresholds: thresholds() });
+  celebrate(res.results, { label, thresholds: thresholds(), quick });
   const names = res.results.length > 3 ? `${res.results.length} 位同學` : res.results.map(r => r.name).join('、');
   toast(`${names} ${signed(d)}（${label}）`, { action: () => undoBatch(res.batch_id), actionLabel: '撤銷' });
   return res;
@@ -159,7 +159,7 @@ async function undoBatch(id) {
   const r = await POST(`/batches/${id}/undo`);
   for (const x of r.results) { const s = students().find(s => s.id === x.student_id); if (s) { s.score = x.score; s.pet = x.pet; } }
   toast(`已撤銷：${r.label}`);
-  if (location.hash.includes('/room')) drawRoomGrid(); else route();
+  if (location.hash.includes('/room')) { drawRoomGrid(); drawGroupRow(); } else route();
 }
 
 function pointSheet(ids) {
@@ -198,31 +198,85 @@ function pointSheet(ids) {
 }
 
 // ---------- 課室模式 ----------
+// room.sort = 'seats'（座位表）| 'number' | 'score' | 'name'
+// room.quick = 'menu'（撳學生彈出選單）| 'd:2'（即時 +2）| 't:5'（即時用標籤 5）
+const byNumber = (a, b) => (a.number ?? 999) - (b.number ?? 999) || a.id - b.id;
 function filteredStudents() {
   const q = room.q.trim();
   let list = students().slice();
   if (q) list = /^\d+$/.test(q) ? list.filter(s => String(s.number ?? '').startsWith(q)) : list.filter(s => s.name.includes(q));
-  if (room.sort === 'score') list.sort((a, b) => b.score - a.score || (a.number ?? 999) - (b.number ?? 999));
+  if (room.sort === 'score') list.sort((a, b) => b.score - a.score || byNumber(a, b));
   else if (room.sort === 'name') list.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+  else list.sort(byNumber);
   return list;
 }
+// 座位表：已編位的學生留在原位；未編位（或超出每行座位數）的按班號填入空位
+function seatLayout(cols) {
+  const pos = new Map(); const taken = new Set();
+  const list = students().slice().sort(byNumber);
+  for (const s of list) {
+    if (s.seat_row == null || s.seat_col == null || s.seat_col >= cols) continue;
+    const k = `${s.seat_row},${s.seat_col}`; if (taken.has(k)) continue;
+    pos.set(s.id, [s.seat_row, s.seat_col]); taken.add(k);
+  }
+  let i = 0;
+  for (const s of list) {
+    if (pos.has(s.id)) continue;
+    while (taken.has(`${Math.floor(i / cols)},${i % cols}`)) i++;
+    pos.set(s.id, [Math.floor(i / cols), i % cols]); taken.add(`${Math.floor(i / cols)},${i % cols}`);
+  }
+  const rows = Math.max(1, ...[...pos.values()].map(p => p[0] + 1));
+  return { pos, rows, cols };
+}
+const seatCols = () => state.cls.class.seat_cols || 6;
+function quickOpts() {
+  const q = room.quick || 'menu';
+  if (q.startsWith('d:')) return { delta: Number(q.slice(2)) };
+  if (q.startsWith('t:')) { const tag = state.boot.tags.find(t => t.id === Number(q.slice(2))); return tag ? { tag } : null; }
+  return null;
+}
+function quickBarHTML() {
+  const q = room.quick || 'menu';
+  const chip = (key, html, cls = '') => `<button class="qchip ${cls}" data-act="quick" data-q="${key}" aria-pressed="${q === key}">${html}</button>`;
+  return `<span class="qlabel">撳學生即時：</span>
+    ${chip('menu', '🗂 彈出選單')}
+    ${[1, 2, 3].map(n => chip(`d:${n}`, `<b class="num">+${n}</b>`, 'pos')).join('')}
+    ${chip('d:-1', '<b class="num">-1</b>', 'neg')}
+    ${state.boot.tags.map(t => chip(`t:${t.id}`, `${esc(t.icon)} ${esc(t.label)} <b class="num">${signed(t.points)}</b>`, t.points > 0 ? 'pos' : 'neg')).join('')}`;
+}
+function seatEditBarHTML() {
+  return `<span class="qlabel">編排座位：拖動學生到新位置，或先點一位學生再點另一位／空位</span>
+    <span class="seg"><button data-act="cols" data-d="-1" aria-label="每行少一個座位">−</button><button disabled class="num">每行 ${seatCols()} 位</button><button data-act="cols" data-d="1" aria-label="每行多一個座位">＋</button></span>
+    <button class="btn sm" data-act="reseat">按班號重新排</button>
+    <button class="btn primary sm" data-act="seatdone">完成</button>`;
+}
+function drawQuickBar() {
+  const bar = $('#quick-bar'); if (!bar) return;
+  bar.className = 'quick-bar' + (room.edit ? ' editing' : '');
+  bar.innerHTML = room.edit ? seatEditBarHTML() : quickBarHTML();
+}
+function drawGroupRow() {
+  const box = $('#group-row'); if (!box) return;
+  box.innerHTML = state.cls.groups.map(g => {
+    const mem = students().filter(s => s.group_id === g.id);
+    return `<span class="group-chip" style="--gc:${esc(g.color)}" data-act="group" data-id="${g.id}"><span class="dot"></span>${esc(g.name)} <span class="num muted">${mem.reduce((a, s) => a + s.score, 0)}</span><span class="plus" data-act="groupplus" data-id="${g.id}">+1</span></span>`;
+  }).join('');
+}
 function renderRoom() {
-  const groups = state.cls.groups;
   shell('room', `
     <div class="room-tools">
       <label class="search">${ICON.search}<input id="room-search" type="search" placeholder="班號或姓名，Enter 加分" autocomplete="off" value="${esc(room.q)}" aria-label="搜尋學生"></label>
-      <select class="input" id="room-sort" style="width:auto" aria-label="排序">
-        <option value="number">按班號</option><option value="score">按分數</option><option value="name">按姓名</option></select>
+      <select class="input" id="room-sort" style="width:auto" aria-label="排列">
+        <option value="seats">座位表</option><option value="number">按班號</option><option value="score">按分數</option><option value="name">按姓名</option></select>
       <div class="seg" aria-label="大小">${['s', 'm', 'l'].map(z => `<button data-act="size" data-v="${z}" aria-pressed="${room.size === z}">${{ s: '小', m: '中', l: '大' }[z]}</button>`).join('')}</div>
+      <button class="btn" data-act="editseats" aria-pressed="${!!room.edit}">🪑 編排座位</button>
       <button class="btn" data-act="multi" aria-pressed="${room.multi}">多選</button>
       <button class="btn" data-act="all">全班加分</button>
       <button class="btn" data-act="timer">⏱ 計時</button>
       <button class="btn" data-act="recent">最近操作</button>
     </div>
-    ${groups.length ? `<div class="group-row">${groups.map(g => {
-      const mem = students().filter(s => s.group_id === g.id);
-      return `<span class="group-chip" style="--gc:${esc(g.color)}" data-act="group" data-id="${g.id}"><span class="dot"></span>${esc(g.name)} <span class="num muted">${mem.reduce((a, s) => a + s.score, 0)}</span><span class="plus" data-act="groupplus" data-id="${g.id}">+1</span></span>`;
-    }).join('')}</div>` : ''}
+    <div id="quick-bar" class="quick-bar"></div>
+    ${state.cls.groups.length ? '<div class="group-row" id="group-row"></div>' : ''}
     <div id="room-grid"></div>
     <div id="selbar"></div>`, { wide: true });
   $('#room-sort').value = room.sort;
@@ -234,51 +288,164 @@ function renderRoom() {
     const list = filteredStudents();
     const exact = /^\d+$/.test(room.q.trim()) ? list.find(s => String(s.number) === room.q.trim()) : null;
     const pick = exact || (list.length === 1 ? list[0] : null);
-    if (pick) { pointSheet([pick.id]); room.q = ''; search.value = ''; drawRoomGrid(); }
+    if (!pick) return;
+    room.q = ''; search.value = '';
+    const opts = quickOpts();
+    if (opts) quickGive([pick.id]); else { pointSheet([pick.id]); drawRoomGrid(); }
   });
   $('#room-sort').onchange = (e) => { room.sort = e.target.value; store.set('sort', room.sort); drawRoomGrid(); };
   if (matchMedia('(pointer:fine)').matches) search.focus();
 
   ACT.size = (el) => { room.size = el.dataset.v; store.set('size', room.size); $$('[data-act=size]').forEach(b => b.setAttribute('aria-pressed', b === el)); drawRoomGrid(); };
-  ACT.multi = (el) => { room.multi = !room.multi; if (!room.multi) room.sel.clear(); el.setAttribute('aria-pressed', room.multi); drawRoomGrid(); };
+  ACT.multi = (el) => { if (room.edit) return; room.multi = !room.multi; if (!room.multi) room.sel.clear(); el.setAttribute('aria-pressed', room.multi); drawRoomGrid(); };
+  ACT.quick = (el) => { room.quick = el.dataset.q; store.set('quick', room.quick); drawQuickBar(); };
   ACT.all = () => pointSheet(students().map(s => s.id));
   ACT.group = (el, e) => {
     if (e.target.closest('[data-act=groupplus]')) return;
     const ids = students().filter(s => s.group_id === Number(el.dataset.id)).map(s => s.id);
     if (!ids.length) return toast('此小組未有組員，請到「學生及分組」編排');
-    pointSheet(ids);
+    if (quickOpts()) quickGive(ids); else pointSheet(ids);
   };
   ACT.groupplus = async (el) => {
-    const g = groups.find(x => x.id === Number(el.dataset.id));
+    const g = state.cls.groups.find(x => x.id === Number(el.dataset.id));
     const ids = students().filter(s => s.group_id === g.id).map(s => s.id);
     if (!ids.length) return toast('此小組未有組員');
-    await givePoints(ids, { delta: 1, reason: `${g.name} 小組加分` }); renderRoom();
+    await givePoints(ids, { delta: 1, reason: `${g.name} 小組加分` }); drawRoomGrid(); drawGroupRow();
   };
   ACT.stu = (el) => {
     const id = Number(el.dataset.id);
+    if (room.edit) return seatTap(id);
     if (room.multi) { room.sel.has(id) ? room.sel.delete(id) : room.sel.add(id); drawRoomGrid(); }
+    else if (quickOpts()) quickGive([id]);
     else pointSheet([id]);
   };
-  ACT.selgo = () => pointSheet([...room.sel]);
+  ACT.seatcell = (el) => {
+    if (!room.edit || room.pick == null) return;
+    moveSeat(room.pick, Number(el.dataset.r), Number(el.dataset.c));
+  };
+  ACT.selgo = () => { const ids = [...room.sel]; if (quickOpts()) { room.sel.clear(); room.multi = false; renderRoom(); quickGive(ids); } else pointSheet(ids); };
   ACT.selclear = () => { room.sel.clear(); drawRoomGrid(); };
   ACT.timer = () => openTimer();
   ACT.recent = () => recentDialog();
-  drawRoomGrid();
+  ACT.editseats = () => {
+    room.edit = !room.edit; room.pick = null;
+    if (room.edit) { room.q = ''; room.multi = false; room.sel.clear(); room.sort = 'seats'; }
+    renderRoom();
+  };
+  ACT.seatdone = () => { room.edit = false; room.pick = null; renderRoom(); toast('座位已儲存'); };
+  ACT.cols = (el) => {
+    const cols = Math.min(12, Math.max(2, seatCols() + Number(el.dataset.d)));
+    if (cols === seatCols()) return;
+    saveSeats(seatLayout(cols).pos, cols);
+  };
+  ACT.reseat = async () => {
+    if (!(await confirmBox('按班號由前排左邊開始重新排座位？', { ok: '重新排' }))) return;
+    const cols = seatCols(); const pos = new Map();
+    students().slice().sort(byNumber).forEach((s, i) => pos.set(s.id, [Math.floor(i / cols), i % cols]));
+    saveSeats(pos, cols);
+  };
+  drawQuickBar(); drawGroupRow(); drawRoomGrid();
+}
+
+// 一撳即加：直接給分並彈出祝賀畫面
+let lastQuick = { id: '', at: 0 };
+async function quickGive(ids) {
+  const opts = quickOpts(); if (!opts) return pointSheet(ids);
+  const key = ids.join(',') + '|' + room.quick; const now = Date.now(); // 同一動作、同一學生 350ms 內只算一次
+  if (lastQuick.id === key && now - lastQuick.at < 350) return; // 防止手指誤觸兩次
+  lastQuick = { id: key, at: now };
+  ids.forEach(id => $(`.stu[data-id="${id}"]`)?.classList.add('bump'));
+  try { await givePoints(ids, { ...opts, quick: true }); drawRoomGrid(); drawGroupRow(); }
+  catch (e) { fail(e); }
+}
+
+// ---------- 座位編排 ----------
+function seatTap(id) {
+  if (Date.now() - (room.justDragged || 0) < 400) return;
+  if (room.pick == null) { room.pick = id; drawRoomGrid(); return; }
+  if (room.pick === id) { room.pick = null; drawRoomGrid(); return; }
+  const target = seatLayout(seatCols()).pos.get(id);
+  moveSeat(room.pick, target[0], target[1]);
+}
+function moveSeat(id, r, c) {
+  const cols = seatCols(); const { pos } = seatLayout(cols);
+  const from = pos.get(id); if (!from) return;
+  const occupant = [...pos].find(([sid, p]) => sid !== id && p[0] === r && p[1] === c)?.[0];
+  pos.set(id, [r, c]); if (occupant) pos.set(occupant, from); // 有人坐 → 兩人交換
+  room.pick = null;
+  saveSeats(pos, cols);
+}
+async function saveSeats(pos, cols) {
+  for (const s of students()) { const p = pos.get(s.id); s.seat_row = p ? p[0] : null; s.seat_col = p ? p[1] : null; }
+  state.cls.class.seat_cols = cols;
+  drawQuickBar(); drawRoomGrid();
+  try {
+    const res = await PUT(`/classes/${state.classId}/seats`, { cols, seats: [...pos].map(([student_id, [row, col]]) => ({ student_id, row, col })) });
+    state.cls = res; drawRoomGrid();
+  } catch (e) { fail(e); await reloadClass(); drawQuickBar(); drawRoomGrid(); }
+}
+function bindSeatDrag(grid) {
+  grid.onpointerdown = (e) => {
+    if (!room.edit || e.button > 0) return;
+    const card = e.target.closest('.stu'); if (!card) return;
+    const id = Number(card.dataset.id); const sx = e.clientX; const sy = e.clientY;
+    const rect = card.getBoundingClientRect(); const ox = sx - rect.left; const oy = sy - rect.top;
+    let ghost = null; let over = null;
+    const move = (ev) => {
+      if (!ghost) {
+        if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 8) return;
+        ghost = card.cloneNode(true); ghost.classList.add('drag-ghost'); ghost.style.width = rect.width + 'px';
+        document.body.appendChild(ghost); card.classList.add('dragging');
+      }
+      ev.preventDefault();
+      ghost.style.left = (ev.clientX - ox) + 'px'; ghost.style.top = (ev.clientY - oy) + 'px';
+      const el = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('#room-grid [data-r]');
+      if (el !== over) { over?.classList.remove('drop-over'); over = el; over?.classList.add('drop-over'); }
+    };
+    const up = (ev) => {
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up);
+      if (!ghost) return;
+      ghost.remove(); card.classList.remove('dragging'); over?.classList.remove('drop-over');
+      room.justDragged = Date.now();
+      if (over && ev.type === 'pointerup') moveSeat(id, Number(over.dataset.r), Number(over.dataset.c));
+    };
+    window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
+  };
+}
+
+function stuCard(s, rc) {
+  const g = groupOf(s);
+  const cls = ['stu', room.sel.has(s.id) ? 'sel' : '', room.edit && room.pick === s.id ? 'picked' : ''].filter(Boolean).join(' ');
+  return `<div class="${cls}" role="button" tabindex="0" data-act="stu" data-id="${s.id}"${rc ? ` data-r="${rc[0]}" data-c="${rc[1]}"` : ''} ${g ? `style="--gc:${esc(g.color)}"` : ''} aria-label="${esc(s.name)}，${s.score} 分">
+    <span class="no">${s.number ?? ''}</span><span class="sc${s.score < 0 ? ' neg' : ''}">${s.score}</span>
+    ${avatar(s)}<span class="nm">${esc(s.name)}</span>${g ? '<span class="gbar"></span>' : ''}</div>`;
 }
 function drawRoomGrid() {
   const grid = $('#room-grid'); if (!grid) return;
-  const list = filteredStudents();
-  grid.className = `students-grid size-${room.size}`;
-  grid.innerHTML = list.length ? list.map(s => {
-    const g = groupOf(s);
-    return `<div class="stu${room.sel.has(s.id) ? ' sel' : ''}" role="button" tabindex="0" data-act="stu" data-id="${s.id}" ${g ? `style="--gc:${esc(g.color)}"` : ''} aria-label="${esc(s.name)}，${s.score} 分">
-      <span class="no">${s.number ?? ''}</span><span class="sc${s.score < 0 ? ' neg' : ''}">${s.score}</span>
-      ${avatar(s)}<span class="nm">${esc(s.name)}</span>${g ? '<span class="gbar"></span>' : ''}</div>`;
-  }).join('') : `<div class="empty" style="grid-column:1/-1">${students().length ? '<strong>找不到相符的學生</strong>試試輸入班號或姓名中的一個字。' : `<strong>此班未有學生</strong><a href="#/c/${state.classId}/students">到「學生及分組」匯入名單</a>`}</div>`;
+  const seatMode = room.sort === 'seats' && !room.q.trim();
+  if (!students().length) {
+    grid.className = 'students-grid'; grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><strong>此班未有學生</strong><a href="#/c/${state.classId}/students">到「學生及分組」匯入名單</a></div>`;
+  } else if (seatMode) {
+    const { pos, rows, cols } = seatLayout(seatCols());
+    const at = new Map([...pos].map(([id, p]) => [`${p[0]},${p[1]}`, id]));
+    const byId = new Map(students().map(s => [s.id, s]));
+    const totalRows = rows + (room.edit ? 1 : 0); let cells = '';
+    for (let r = 0; r < totalRows; r++) for (let c = 0; c < cols; c++) {
+      const sid = at.get(`${r},${c}`);
+      cells += sid ? stuCard(byId.get(sid), [r, c]) : `<div class="seat-empty" data-act="seatcell" data-r="${r}" data-c="${c}" aria-label="空位"></div>`;
+    }
+    grid.className = `seat-scroll size-${room.size}`;
+    grid.innerHTML = `<div class="seat-board" style="--cols:${cols}"><div class="front">講台 · 白板</div><div class="seats${room.edit ? ' editing' : ''}">${cells}</div></div>`;
+  } else {
+    const list = filteredStudents();
+    grid.className = `students-grid size-${room.size}`;
+    grid.innerHTML = list.length ? list.map(s => stuCard(s)).join('') : '<div class="empty" style="grid-column:1/-1"><strong>找不到相符的學生</strong>試試輸入班號或姓名中的一個字。</div>';
+  }
+  bindSeatDrag(grid);
   grid.onkeydown = (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.dataset.act === 'stu') { e.preventDefault(); ACT.stu(e.target); } };
   const bar = $('#selbar');
   if (bar) bar.innerHTML = room.multi ? `<div class="selbar"><span>已選 <b class="num">${room.sel.size}</b> 位</span>
-    <button class="btn sm" data-act="selclear">清除</button><button class="btn primary" data-act="selgo" ${room.sel.size ? '' : 'disabled'}>給分</button></div>` : '';
+    <button class="btn sm" data-act="selclear">清除</button><button class="btn primary" data-act="selgo" ${room.sel.size ? '' : 'disabled'}>${quickOpts() ? '即時給分' : '給分'}</button></div>` : '';
 }
 async function recentDialog() {
   const rows = await GET(`/classes/${state.classId}/batches?limit=15`);

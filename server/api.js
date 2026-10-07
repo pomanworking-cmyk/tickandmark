@@ -118,6 +118,30 @@ export function createApi(db) {
     };
   });
 
+  // ---------- 座位表 ----------
+  on('PUT', '/classes/:id/seats', ({ tid, p, body }) => {
+    const c = own('classes', p.id, tid);
+    const cols = body.cols === undefined ? c.seat_cols : int(body.cols);
+    if (!(cols >= 2 && cols <= 12)) throw bad('每行座位數須為 2 至 12');
+    const seats = Array.isArray(body.seats) ? body.seats : [];
+    const used = new Set();
+    for (const st of seats) {
+      const r = int(st.row); const col = int(st.col);
+      if (!(r >= 0 && r < 30 && col >= 0 && col < cols)) throw bad('座位位置不正確');
+      const key = `${r},${col}`; if (used.has(key)) throw bad('同一個座位不可坐兩位學生'); used.add(key);
+    }
+    tx(db, () => {
+      db.prepare('UPDATE classes SET seat_cols = ? WHERE id = ?').run(cols, c.id);
+      db.prepare('UPDATE students SET seat_row = NULL, seat_col = NULL WHERE class_id = ?').run(c.id);
+      for (const st of seats) {
+        const s = own('students', int(st.student_id), tid);
+        if (s.class_id !== c.id) throw bad('學生不屬於此班');
+        db.prepare('UPDATE students SET seat_row = ?, seat_col = ? WHERE id = ?').run(int(st.row), int(st.col), s.id);
+      }
+    });
+    return { class: own('classes', c.id, tid), students: studentsOf(c.id), groups: db.prepare('SELECT * FROM groups WHERE class_id = ? ORDER BY id').all(c.id) };
+  });
+
   // ---------- 學生 ----------
   on('POST', '/classes/:id/students', ({ tid, p, body }) => {
     const c = own('classes', p.id, tid);

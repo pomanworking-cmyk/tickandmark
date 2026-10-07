@@ -154,10 +154,12 @@ try:
         # 扣分不倒退
         before = by4b[bear['id']]['pet']
         page.locator('.stu').first.click(); page.wait_for_selector('dialog .tag-grid'); page.click('dialog .quick [data-d="-2"]')
-        page.wait_for_timeout(400)
+        page.wait_for_selector('.celebrate.minus .cele-card')
+        minus = page.eval_on_selector('.celebrate.minus', "e => ({ d: e.querySelector('.delta').textContent, sp: e.querySelector('.avatar').dataset.species, st: e.querySelector('.avatar').dataset.stage })")
         after = api(page, 'GET', f"/students/{bear['id']}")['student']['pet']
         check('扣分：XP 及階段不變', after['xp'] == before['xp'] and after['stage'] == before['stage'], f"{before['xp']}→{after['xp']} {after['stage']}")
-        check('扣分沒有彈出祝賀', page.locator('.celebrate').count() == 0)
+        check('扣分彈出簡短確認（無彩紙），顯示自己寵物', minus['d'] == '-2' and minus['sp'] == 'earth_bear' and minus['st'] == after['stage'] and page.locator('.celebrate .spark').count() == 0, json.dumps(minus))
+        page.click('.celebrate .cele-card')
 
         # 撤銷最近一次 +5 → XP 扣回、階段不倒退
         page.click('[data-act=recent]'); page.wait_for_selector('dialog [data-undo]')
@@ -173,6 +175,63 @@ try:
         r1 = api(page, 'POST', '/points', {'class_id': ids['4B'], 'student_ids': [bear['id']], 'delta': 3, 'client_batch_id': 'dup-test'})
         r2 = api(page, 'POST', '/points', {'class_id': ids['4B'], 'student_ids': [bear['id']], 'delta': 3, 'client_batch_id': 'dup-test'})
         check('同一筆加分重送不會重複計算', r2.get('replayed') and r2['results'][0]['pet']['xp'] == r1['results'][0]['pet']['xp'] == 3)
+
+        # 一撳即加：先揀「+2」，再撳學生，直接加分並彈出畫面
+        page.goto(BASE + f"#/c/{ids['4B']}/room"); page.wait_for_selector('.stu')
+        page.click('.qchip[data-q="d:2"]')
+        target = api(page, 'GET', f"/classes/{ids['4B']}/full")['students'][5]
+        page.click(f'.stu[data-id="{target["id"]}"]')
+        page.wait_for_selector(f'.celebrate .cele-card[data-cele-student="{target["id"]}"]')
+        q = page.eval_on_selector('.celebrate', "e => ({ d: e.querySelector('.delta').textContent, sp: e.querySelector('.avatar').dataset.species, st: e.querySelector('.avatar').dataset.stage })")
+        page.screenshot(path=f'{OUT}/quick-give.png')
+        t2 = api(page, 'GET', f"/students/{target['id']}")['student']
+        check('一撳即加：沒有選單，直接 +2 並彈出', page.locator('dialog').count() == 0 and q['d'] == '+2' and t2['score'] == target['score'] + 2, json.dumps(q))
+        check('一撳即加：彈窗寵物與資料庫一致，XP +2', q['sp'] == t2['pet']['species_key'] and q['st'] == t2['pet']['stage'] and t2['pet']['xp'] == target['pet']['xp'] + 2)
+        # 彈窗未關時直接撳另一位（背景不阻擋）
+        free_id = page.evaluate("""(tid) => { const c = document.querySelector('.celebrate .cele-card').getBoundingClientRect();
+          const hit = (b) => !(b.right < c.left || b.left > c.right || b.bottom < c.top || b.top > c.bottom);
+          return +[...document.querySelectorAll('.stu')].find(e => +e.dataset.id !== tid && !hit(e.getBoundingClientRect())).dataset.id; }""", target['id'])
+        other = next(x for x in api(page, 'GET', f"/classes/{ids['4B']}/full")['students'] if x['id'] == free_id)
+        ob = page.locator(f'.stu[data-id="{other["id"]}"]').bounding_box()
+        check('彈窗仍在畫面', page.locator('.celebrate').count() == 1)
+        page.mouse.click(ob['x'] + ob['width'] / 2, ob['y'] + ob['height'] / 2)
+        page.wait_for_selector(f'.celebrate .cele-card[data-cele-student="{other["id"]}"]')
+        check('彈窗未關都可以連續撳下一位', api(page, 'GET', f"/students/{other['id']}")['student']['score'] == other['score'] + 2)
+        page.click('.qchip[data-q="d:-1"]'); page.click(f'.stu[data-id="{other["id"]}"]', position={'x': 20, 'y': 12})
+        page.wait_for_selector('.celebrate.minus')
+        check('一撳即扣 -1', api(page, 'GET', f"/students/{other['id']}")['student']['score'] == other['score'] + 1)
+        tagq = next(t for t in api(page, 'GET', '/bootstrap')['tags'] if t['points'] == 2)
+        page.click(f'.qchip[data-q="t:{tagq["id"]}"]'); page.click(f'.stu[data-id="{target["id"]}"]', position={'x': 20, 'y': 12})
+        page.wait_for_selector(f'.celebrate .cele-card[data-cele-student="{target["id"]}"]')
+        check('一撳即用行為標籤', page.inner_text('.celebrate .what').strip().endswith(tagq['label']), page.inner_text('.celebrate .what'))
+        page.click('.qchip[data-q="menu"]'); page.wait_for_timeout(2000)
+
+        # 座位表：拖動到空位、點選交換、每行座位數，並重新載入確認已儲存
+        page.click('[data-act=editseats]'); page.wait_for_selector('.seats.editing')
+        cards = api(page, 'GET', f"/classes/{ids['4B']}/full")['students']
+        mover = cards[0]
+        empty = page.locator('.seats .seat-empty').last; eb = empty.bounding_box(); er, ec = int(empty.get_attribute('data-r')), int(empty.get_attribute('data-c'))
+        mb = page.locator(f'.stu[data-id="{mover["id"]}"]').bounding_box()
+        page.mouse.move(mb['x'] + mb['width'] / 2, mb['y'] + mb['height'] / 2); page.mouse.down()
+        page.mouse.move(mb['x'] + 40, mb['y'] + 40, steps=4); page.mouse.move(eb['x'] + eb['width'] / 2, eb['y'] + eb['height'] / 2, steps=8)
+        page.screenshot(path=f'{OUT}/seat-drag.png'); page.mouse.up(); page.wait_for_timeout(500)
+        m2 = next(x for x in api(page, 'GET', f"/classes/{ids['4B']}/full")['students'] if x['id'] == mover['id'])
+        check('拖動學生到空位並儲存', (m2['seat_row'], m2['seat_col']) == (er, ec), f"{m2['seat_row']},{m2['seat_col']} 應為 {er},{ec}")
+        b_, c_ = cards[1], cards[2]
+        page.wait_for_timeout(450)
+        page.click(f'.stu[data-id="{b_["id"]}"]'); page.click(f'.stu[data-id="{c_["id"]}"]'); page.wait_for_timeout(500)
+        after_s = {x['id']: x for x in api(page, 'GET', f"/classes/{ids['4B']}/full")['students']}
+        check('先點後點：兩位學生交換座位', (after_s[b_['id']]['seat_row'], after_s[b_['id']]['seat_col']) == (0, 2) and (after_s[c_['id']]['seat_row'], after_s[c_['id']]['seat_col']) == (0, 1),
+              f"{after_s[b_['id']]['seat_row']},{after_s[b_['id']]['seat_col']} / {after_s[c_['id']]['seat_row']},{after_s[c_['id']]['seat_col']}")
+        page.click('[data-act=cols][data-d="1"]'); page.wait_for_timeout(500)
+        check('每行座位數可調整', api(page, 'GET', f"/classes/{ids['4B']}/full")['class']['seat_cols'] == 7)
+        page.screenshot(path=f'{OUT}/seat-edit.png', full_page=True)
+        page.click('[data-act=seatdone]')
+        page.reload(); page.wait_for_selector('.seats')
+        dom_pos = page.eval_on_selector(f'.stu[data-id="{mover["id"]}"]', 'e => [+e.dataset.r, +e.dataset.c]')
+        check('重新載入後座位保持', tuple(dom_pos) == (er, ec), str(dom_pos))
+        verify_against_db(page, '4B 座位表模式', dom_avatars(page, '#room-grid .avatar'), {x['id']: x for x in api(page, 'GET', f"/classes/{ids['4B']}/full")['students']})
+        page.screenshot(path=f'{OUT}/seat-chart.png', full_page=True)
 
         # 隨機加分令各班處於不同階段，然後逐頁核對
         random.seed(7)

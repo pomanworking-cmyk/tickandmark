@@ -28,9 +28,9 @@ erDiagram
 | `teachers` | 老師帳戶 | `email` UNIQUE；`password_hash` = scrypt |
 | `sessions` | 登入工作階段 | 只存 token 的 SHA-256；30 日到期 |
 | `settings` | 每位老師的設定 | `thresholds` JSON：`{baby, junior, adult, evolved}`；`timer_presets` |
-| `classes` | 班別 | `name`、`school_year` |
+| `classes` | 班別 | `name`、`school_year`、`seat_cols`（座位表每行座位數） |
 | `groups` | 小組 | `color` |
-| `students` | 學生 | `number`（班號）、`group_id`、`score`（總分快取，＝未撤銷 `score_events.delta` 總和） |
+| `students` | 學生 | `number`（班號）、`group_id`、`seat_row`／`seat_col`（座位，NULL＝未編位，自動按班號補位）、`score`（總分快取，＝未撤銷 `score_events.delta` 總和） |
 | `behavior_tags` | 行為標籤 | `points`（-20 至 20）、`icon` |
 | `score_batches` | 一次加減分操作 | `UNIQUE(teacher_id, client_batch_id)` 防重複提交；`undone_at` |
 | `score_events` | 每位學生每筆分數 | `kind` = `point`（課堂）或 `import`（保留舊分數）；`id` 單調遞增 |
