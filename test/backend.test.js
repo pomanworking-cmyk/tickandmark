@@ -4,13 +4,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { createServer } from '../server/server.js';
+import { openTurso } from '../server/db-turso.js';
+import { startTursoMock } from './turso-mock.js';
 import { createDemoBackend } from '../public/js/demo-backend.js';
 import { SPECIES_KEYS, STAGES, petImageUrl, DEFAULT_THRESHOLDS } from '../public/shared/pet-logic.js';
 
 const ROOT = new URL('../public/', import.meta.url);
 
-async function serverClient() {
-  const srv = createServer({ dbFile: ':memory:', allowRegistration: true });
+async function serverClient(opts = {}) {
+  const srv = createServer({ dbFile: ':memory:', allowRegistration: true, ...opts });
   await new Promise(r => srv.listen(0, r));
   const base = `http://127.0.0.1:${srv.address().port}/api`;
   const jars = {}; let who = 'A';
@@ -253,6 +255,19 @@ async function scenario(c) {
     await assert.rejects(c.req('DELETE', `/homework-templates/${tpl[0].id}`), /找不到資料/);
     c.as('A');
 
+    // 管理員：第一位老師（A）是管理員；只見帳戶、使用時間及班別，見不到密碼或學生
+    const adm = await c.req('GET', '/admin/teachers');
+    assert.equal(adm.teachers.length, 2);
+    const ta = adm.teachers.find(t => t.email === 'chan@school.hk');
+    assert.equal(ta.is_admin, true); assert.deepEqual(ta.classes.map(x => x.name), ['4A', '4B', '5C']);
+    assert.ok(ta.last_login_at && ta.last_seen_at, '有最後登入及使用時間');
+    const raw = JSON.stringify(adm);
+    assert.ok(!/password|scrypt|陳大文|token/.test(raw), '管理員資料不含密碼、工作階段或學生姓名');
+    L('admin', adm.teachers.map(t => [t.name, t.is_admin, t.class_count, t.student_count, t.actions_7d, t.classes.map(x => [x.name, x.student_count])]));
+    c.as('B');
+    await assert.rejects(c.req('GET', '/admin/teachers'), /只限管理員/);
+    assert.equal((await c.req('GET', '/auth/me')).teacher.is_admin, false);
+    c.as('A');
     const audit = await c.req('GET', '/audit');
     assert.deepEqual(audit.problems, [], '資料一致性自我檢查');
     L('audit-pets', audit.pets);
@@ -281,8 +296,8 @@ test('伺服器 + SQLite 通過全部情境', async () => {
     assert.equal(res.status, 403);
     // 資料庫層面：ledger 主鍵保證同一事件不能入帳兩次
     assert.throws(() => {
-      const l = c.db.prepare('SELECT * FROM pet_xp_ledger LIMIT 1').get();
-      c.db.prepare('INSERT INTO pet_xp_ledger (score_event_id, pet_id, xp, stage_before, stage_after) VALUES (?,?,?,?,?)').run(l.score_event_id, l.pet_id, l.xp, 'egg', 'egg');
+      const l = c.db.raw.prepare('SELECT * FROM pet_xp_ledger LIMIT 1').get();
+      c.db.raw.prepare('INSERT INTO pet_xp_ledger (score_event_id, pet_id, xp, stage_before, stage_after) VALUES (?,?,?,?,?)').run(l.score_event_id, l.pet_id, l.xp, 'egg', 'egg');
     }, /UNIQUE|PRIMARY/);
     globalThis.__serverLog = log;
   } finally { c.close(); }
@@ -312,7 +327,8 @@ test('八款 × 五階段圖片全部存在、互不相同', () => {
 
 test('舊資料庫自動升級（加入座位欄位）', async () => {
   const { DatabaseSync } = await import('node:sqlite');
-  const { openDb } = await import('../server/db.js');
+  const { openSqlite } = await import('../server/db-sqlite.js');
+  const { initSchema } = await import('../server/db-common.js');
   const os = await import('node:os'); const path = await import('node:path');
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tm-')), 'old.db');
   const old = new DatabaseSync(file);
@@ -321,7 +337,7 @@ test('舊資料庫自動升級（加入座位欄位）', async () => {
     CREATE TABLE students (id INTEGER PRIMARY KEY, teacher_id INTEGER, class_id INTEGER, number INTEGER, name TEXT, group_id INTEGER, score INTEGER NOT NULL DEFAULT 0, created_at TEXT);
     INSERT INTO classes (id, teacher_id, name) VALUES (1, 1, '舊班');`);
   old.close();
-  const db = openDb(file);
+  const adb = openSqlite(file); await initSchema(adb); const db = adb.raw;
   const cols = (t) => db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
   assert.ok(cols('classes').includes('seat_cols') && cols('students').includes('seat_row') && cols('students').includes('seat_col'));
   assert.equal(db.prepare('SELECT seat_cols FROM classes WHERE id = 1').get().seat_cols, 6);
@@ -340,4 +356,71 @@ test('寵物肚餓：只數上課日，加分後即飽', async () => {
   assert.equal(hungerLevel({ ...pet, last_fed_at: null }, 3, new Date('2026-10-06T10:00:00+08:00')), 1, '未加過分就由派蛋日起計');
   assert.match(hungerMessage({ stage: 'egg' }, 2), /孵化/);
   assert.match(hungerMessage({ stage: 'adult' }, 2), /幫幫我/);
+});
+
+test('Turso 雲端資料庫（模擬 HTTP API）通過全部情境，結果與本機 SQLite 完全一致', async () => {
+  const mock = await startTursoMock();
+  const c = await serverClient({ db: openTurso({ url: mock.url, authToken: mock.token }) });
+  try {
+    const log = await scenario(c);
+    assert.ok(globalThis.__serverLog, '需要先跑伺服器測試');
+    assert.deepEqual(strip(log), strip(globalThis.__serverLog));
+    assert.ok(mock.stats.requests > 100, '確實經 HTTP 存取資料庫');
+  } finally { c.close(); mock.close(); }
+});
+
+test('Turso 交易：出錯時整筆回滾', async () => {
+  const mock = await startTursoMock();
+  const db = openTurso({ url: mock.url, authToken: mock.token });
+  try {
+    await db.run('CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT NOT NULL)');
+    await db.tx(async () => { await db.run('INSERT INTO t (v) VALUES (?)', 'a'); await db.run('INSERT INTO t (v) VALUES (?)', 'b'); });
+    await assert.rejects(db.tx(async () => { await db.run('INSERT INTO t (v) VALUES (?)', 'c'); await db.run('INSERT INTO t (v) VALUES (?)', null); }), /NOT NULL/);
+    assert.deepEqual((await db.all('SELECT v FROM t ORDER BY id')).map(r => r.v), ['a', 'b']);
+    const r = await db.get('INSERT INTO t (v) VALUES (?) RETURNING id, v', 'd'); assert.deepEqual(r, { id: 3, v: 'd' });
+    assert.equal((await db.get('SELECT 1.5 AS f, NULL AS n, ? AS s', '中文')).s, '中文');
+    await assert.rejects(openTurso({ url: mock.url, authToken: 'wrong' }).get('SELECT 1'), /401/);
+  } finally { mock.close(); }
+});
+
+test('Netlify Function：登入、Cookie、防 CSRF、加分及管理員', async () => {
+  const mock = await startTursoMock();
+  process.env.TURSO_DATABASE_URL = mock.url; process.env.TURSO_AUTH_TOKEN = mock.token; process.env.REGISTRATION_CODE = 'school-2026';
+  const { default: handler, config } = await import('../netlify/functions/api.mjs');
+  assert.equal(config.path, '/api/*');
+  const jar = {};
+  const call = async (who, method, path, body) => {
+    const res = await handler(new Request(`https://tick.example/api${path}`, { method, headers: { 'content-type': 'application/json', 'x-tm': '1', ...(jar[who] ? { cookie: jar[who] } : {}) }, body: body ? JSON.stringify(body) : undefined }), { ip: '1.2.3.4' });
+    const sc = res.headers.get('set-cookie'); if (sc) jar[who] = sc.split(';')[0];
+    return { status: res.status, data: await res.json(), cookie: sc };
+  };
+  try {
+    const reg = await call('A', 'POST', '/auth/register', { email: 'head@school.hk', name: '黃主任', password: 'secret-pass-1' });
+    assert.equal(reg.status, 200); assert.equal(reg.data.teacher.is_admin, true); assert.match(reg.cookie, /HttpOnly/); assert.match(reg.cookie, /Secure/);
+    assert.equal((await call('B', 'POST', '/auth/register', { email: 'b@school.hk', name: '何老師', password: 'secret-pass-2' })).status, 403, '冇註冊碼不能註冊');
+    const rb = await call('B', 'POST', '/auth/register', { email: 'b@school.hk', name: '何老師', password: 'secret-pass-2', code: 'school-2026' });
+    assert.equal(rb.status, 200); assert.equal(rb.data.teacher.is_admin, false);
+    const cls = (await call('B', 'POST', '/classes', { name: '2C' })).data;
+    const st = (await call('B', 'POST', `/classes/${cls.id}/students`, { students: [{ number: 1, name: '學生甲' }, { number: 2, name: '學生乙' }] })).data.created;
+    await call('B', 'POST', '/pets/assign', { student_ids: st.map(x => x.id), species_key: 'water_koi' });
+    const pts = (await call('B', 'POST', '/points', { class_id: cls.id, student_ids: [st[0].id], delta: 5, client_batch_id: 'n-1' })).data;
+    assert.equal(pts.results[0].pet.stage, 'baby'); assert.equal(pts.results[0].pet.species_key, 'water_koi');
+    // 防 CSRF
+    const noHeader = await handler(new Request('https://tick.example/api/classes', { method: 'POST', headers: { cookie: jar.B }, body: '{}' }), {});
+    assert.equal(noHeader.status, 403);
+    // 私隱：A 看不到 B 的班
+    assert.equal((await call('A', 'GET', `/classes/${cls.id}/full`)).status, 404);
+    // 管理員
+    const adm = await call('A', 'GET', '/admin/teachers');
+    assert.equal(adm.status, 200);
+    const b = adm.data.teachers.find(t => t.email === 'b@school.hk');
+    assert.deepEqual(b.classes.map(x => [x.name, x.student_count]), [['2C', 2]]); assert.equal(b.actions_7d, 1); assert.ok(b.last_seen_at);
+    assert.ok(!/password|scrypt|學生甲|token_hash/.test(JSON.stringify(adm.data)));
+    assert.equal((await call('B', 'GET', '/admin/teachers')).status, 403);
+    // 登入失敗限制
+    for (let i = 0; i < 10; i++) await call('X', 'POST', '/auth/login', { email: 'b@school.hk', password: 'wrong' });
+    assert.equal((await call('X', 'POST', '/auth/login', { email: 'b@school.hk', password: 'secret-pass-2' })).status, 429);
+    assert.equal((await call('B', 'POST', '/auth/logout')).status, 200);
+    assert.equal((await call('B', 'GET', '/classes')).status, 401);
+  } finally { mock.close(); }
 });

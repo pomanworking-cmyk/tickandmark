@@ -584,3 +584,16 @@ h1 { font-size: 1.45rem; } h2 { font-size: 1.15rem; } h3 { font-size: 1rem; }
 .cele-multi .m .lv.hw { background: #f1f4ff; color: #4f5fb0; }
 .ms-say { display: block; color: #4f5fb0; font-size: .85rem; font-weight: 700; margin: 2px 0 4px; }
 .ms-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 0; border-top: 1px dashed var(--line); font-weight: 600; font-size: .92rem; }
+
+/* ===== 管理員 ===== */
+.admin-note { background: var(--lav-soft); color: #5b47a0; border: 2px dashed var(--lav); border-radius: 18px; padding: 10px 14px; font-weight: 700; margin: 0 0 14px; }
+.admin-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.admin-stats > div { background: #fff; border: 2px solid var(--line); border-radius: 20px; padding: 12px 16px; display: grid; }
+.admin-stats b { font-size: 1.8rem; color: var(--accent-strong); line-height: 1.1; }
+.admin-stats span { color: var(--muted); font-size: .85rem; font-weight: 700; }
+.admin-list { display: grid; gap: 12px; }
+.at-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
+.at-head h2 { margin: 0; display: flex; gap: 8px; align-items: center; }
+.at-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 12px 0 4px; }
+.at-grid > div { background: var(--surface-2); border-radius: 14px; padding: 8px 12px; display: grid; }
+.at-grid span { font-size: .78rem; color: var(--muted); font-weight: 700; }

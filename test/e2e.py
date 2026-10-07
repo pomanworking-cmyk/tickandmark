@@ -442,6 +442,14 @@ try:
         other.evaluate("fetch('/api/auth/register', { method: 'POST', headers: { 'content-type': 'application/json', 'x-tm': '1' }, body: JSON.stringify({ email: 'lee@school.edu.hk', name: '李老師', password: 'Password123' }) })")
         st = other.evaluate(f"fetch('/api/classes/{ids['4A']}/full').then(r => r.status)")
         check('其他老師不能讀取本班（404）', st == 404, str(st))
+        # 管理員頁（第一位註冊的陳老師是管理員）
+        page.goto(BASE + '#/admin'); page.wait_for_selector('.admin-teacher')
+        txt = page.inner_text('main')
+        check('管理員頁：列出全部老師及班別', page.locator('.admin-teacher').count() == 2 and '4A' in txt and '6C' in txt and '李老師' in txt, str(page.locator('.admin-teacher').count()))
+        check('管理員頁：唔顯示學生姓名或密碼', not any(n in txt for n in names4a + names4b) and 'Password' not in txt)
+        page.screenshot(path=f'{OUT}/admin.png', full_page=True)
+        other.goto(BASE + '#/admin'); other.wait_for_timeout(800)
+        check('非管理員入唔到管理員頁', other.locator('.admin-teacher').count() == 0 and other.evaluate("fetch('/api/admin/teachers').then(r => r.status)") == 403)
         br.close()
     check('瀏覽器無 JavaScript 錯誤', not errors, ' | '.join(errors[:5]))
 finally:

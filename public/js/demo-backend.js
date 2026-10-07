@@ -444,24 +444,39 @@ export function createDemoBackend(initial) {
     return { ok: true };
   });
 
-  // 與伺服器相同的登入介面（示範模式不檢查密碼強度以外的東西）
+  // 與伺服器相同的登入介面（示範模式：密碼只存在瀏覽器記憶體）
   let session = null;
+  const pub = (t) => t && { id: t.id, email: t.email, name: t.name, is_admin: !!t.is_admin };
   function auth(path, body) {
-    if (path === '/auth/me') return { teacher: session && clone(S.teachers.find(t => t.id === session)) };
+    if (path === '/auth/me') return { teacher: session ? pub(S.teachers.find(t => t.id === session)) : null };
     if (path === '/auth/logout') { session = null; return { ok: true }; }
     if (path === '/auth/register') {
       const email = str(body.email).toLowerCase(); const name = str(body.name, 40);
       if (!/^\S+@\S+\.\S+$/.test(email)) throw bad('請輸入有效電郵'); if (!name) throw bad('請輸入老師稱呼');
       if (String(body.password || '').length < 8) throw bad('密碼最少 8 個字元');
       if (S.teachers.some(t => t.email === email)) throw new HttpError(409, '此電郵已註冊');
-      const t = insert('teachers', { email, name, password: String(body.password) }); seedTeacher(t.id); session = t.id;
-      return { teacher: { id: t.id, email, name } };
+      const t = insert('teachers', { email, name, password: String(body.password), is_admin: S.teachers.length === 0 ? 1 : 0, last_login_at: now(), last_seen_at: now() });
+      seedTeacher(t.id); session = t.id;
+      return { teacher: pub(t) };
     }
     if (path === '/auth/login') {
       const t = S.teachers.find(t => t.email === str(body.email).toLowerCase() && t.password === String(body.password || ''));
-      if (!t) throw new HttpError(401, '電郵或密碼不正確'); session = t.id; return { teacher: { id: t.id, email: t.email, name: t.name } };
+      if (!t) throw new HttpError(401, '電郵或密碼不正確'); session = t.id; t.last_login_at = t.last_seen_at = now(); return { teacher: pub(t) };
     }
     return undefined;
+  }
+  // 管理員：只看老師帳戶、使用時間及班別概況（不含密碼及學生資料）
+  function adminTeachers() {
+    const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString(); const monthAgo = new Date(Date.now() - 30 * 864e5).toISOString();
+    return S.teachers.slice().sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : a.id - b.id)).map(t => {
+      const batches = S.score_batches.filter(b => b.teacher_id === t.id);
+      const last = batches.map(b => b.created_at).sort().pop() ?? null;
+      return { id: t.id, name: t.name, email: t.email, is_admin: !!t.is_admin, created_at: t.created_at, last_login_at: t.last_login_at ?? null, last_seen_at: t.last_seen_at ?? null,
+        class_count: S.classes.filter(c => c.teacher_id === t.id).length, student_count: S.students.filter(s => s.teacher_id === t.id).length,
+        actions_7d: batches.filter(b => b.created_at >= weekAgo).length, actions_30d: batches.filter(b => b.created_at >= monthAgo).length, last_points_at: last,
+        classes: S.classes.filter(c => c.teacher_id === t.id).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.id - b.id))
+          .map(c => ({ id: c.id, name: c.name, school_year: c.school_year, created_at: c.created_at, student_count: S.students.filter(s => s.class_id === c.id).length })) };
+    });
   }
 
   function handle(method, path, { tid, body = {}, query = {} } = {}) {
@@ -478,6 +493,8 @@ export function createDemoBackend(initial) {
       const [p, qs] = path.split('?');
       const a = auth(p, body || {}); if (a !== undefined) return clone(a);
       if (!session) throw new HttpError(401, '請先登入');
+      const me = S.teachers.find(t => t.id === session); me.last_seen_at = now();
+      if (p === '/admin/teachers') { if (!me.is_admin) throw new HttpError(403, '只限管理員'); return clone({ teachers: adminTeachers() }); }
       return handle(method, p, { tid: session, body, query: Object.fromEntries(new URLSearchParams(qs || '')) });
     },
     loginAs(id) { session = id; },

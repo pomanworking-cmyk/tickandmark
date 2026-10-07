@@ -2,7 +2,12 @@
 
 香港小學老師用的班級管理網站：寵物太耐冇加分會肚餓求救、寵物提醒主人交欠交功課、隨機抽人、點名、座位表收功課、全班合作目標（能量瓶）、獎勵兌換、隨機／平均能力分組、噪音計、可拖動編排的座位表、「先揀分數，一撳學生即加」的快速給分、課室加分、行為標籤、小組、計時、最近操作及撤銷、分數歷史、功課提交（可儲存常用功課名稱，下次一按即用）、考試成績、海報，以及八款原創寵物（蛋 → 寶寶 → 少年 → 成年 → 進化）。全部介面為繁體中文，只用淺色粉彩主題（系統深色模式下仍是淺色），手機、平板及課室大螢幕均適用。
 
-**完全獨立，不依賴 Base44 或任何第三方後端。** 伺服器只需 Node.js 22.13 或以上，零 npm 套件（使用 Node 內置 `node:sqlite`）。
+**完全獨立，不依賴 Base44。** 兩種部署方式，同一套程式：
+
+1. **Netlify ＋ Turso（推薦，免管伺服器）**：網頁及 Netlify Functions 後端，資料存於 Turso 雲端資料庫。逐步說明見 [`docs/NETLIFY.md`](docs/NETLIFY.md)。
+2. **自行架設**：Node.js 22.13 或以上，零 npm 套件（本機用內置 `node:sqlite`；設定 `TURSO_DATABASE_URL` 則改用 Turso）。
+
+多位老師共用一個網站，各自登入、資料互不相通。第一位註冊的老師是**管理員**，只可查看老師使用紀錄及班別概況，看不到任何密碼或學生資料。
 
 ## 快速開始
 
@@ -23,7 +28,9 @@ python3 test/e2e.py     # 瀏覽器驗收（需要 Python Playwright 及 openpyx
 | `DB_FILE` | `data/tickandmark.db` | SQLite 資料庫位置（必須放在持久磁碟） |
 | `REGISTRATION_CODE` | 空 | 新老師註冊時須輸入的學校註冊碼 |
 | `ALLOW_REGISTRATION` | `false` | `true` = 任何人可註冊 |
-| `SECURE_COOKIE` | `false` | 以 HTTPS 部署時設為 `true` |
+| `SECURE_COOKIE` | `false` | 以 HTTPS 部署時設為 `true`（Netlify 預設開啟） |
+| `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | 空 | 使用 Turso 雲端資料庫（Netlify 必須） |
+| `ADMIN_EMAILS` | 空 | 額外管理員電郵（逗號分隔）；第一位註冊的老師自動是管理員 |
 
 ## 部署
 
@@ -57,9 +64,12 @@ docker run -d -p 3000:3000 -v tm-data:/app/data -e SECURE_COOKIE=true -e REGISTR
 ## 檔案結構
 
 ```
-server/server.js      HTTP 伺服器、登入、靜態檔案
-server/api.js         全部業務邏輯及 API
-server/schema.sql     資料庫結構（見 docs/database.md）
+server/app.js         請求處理：登入、工作階段、防 CSRF、管理員（自架及 Netlify 共用）
+server/api.js         全部業務邏輯及 API（非同步，SQLite／Turso 通用）
+server/schema.js      資料庫結構（見 docs/database.md）
+server/db-sqlite.js   本機 SQLite；server/db-turso.js Turso HTTP API（無需套件）
+server/server.js      自架用 HTTP 伺服器
+netlify/functions/api.mjs  Netlify Function（/api/*）；netlify.toml 網站設定
 public/shared/pet-logic.js  寵物規則（伺服器及瀏覽器共用）
 public/js/app.js      前端單頁應用
 public/js/ui.js       寵物頭像、加分祝賀彈窗、對話框

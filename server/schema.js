@@ -1,10 +1,14 @@
--- Tick and Mark 資料庫結構（SQLite）。所有資料都以 teacher_id 分隔，只限登入老師本人讀寫。
+// Tick and Mark 資料庫結構（SQLite／Turso libSQL 通用）。所有資料以 teacher_id 分隔。
+export const SCHEMA = String.raw`-- Tick and Mark 資料庫結構（SQLite）。所有資料都以 teacher_id 分隔，只限登入老師本人讀寫。
 
 CREATE TABLE IF NOT EXISTS teachers (
   id            INTEGER PRIMARY KEY,
   email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
   name          TEXT NOT NULL,
-  password_hash TEXT NOT NULL,
+  password_hash TEXT NOT NULL,             -- scrypt 雜湊，任何 API（包括管理員）都不會傳回
+  is_admin      INTEGER NOT NULL DEFAULT 0,  -- 管理員：只可查看老師使用紀錄及班別，看不到密碼及學生資料
+  last_login_at TEXT,
+  last_seen_at  TEXT,
   created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
@@ -207,3 +211,11 @@ CREATE TABLE IF NOT EXISTS redemptions (
   undone_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_redemptions_student ON redemptions(student_id);
+
+-- 登入失敗紀錄（限制嘗試次數；雲端函數無法用記憶體計數）
+CREATE TABLE IF NOT EXISTS login_attempts (
+  key  TEXT NOT NULL,
+  at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_login_attempts ON login_attempts(key, at);
+`;

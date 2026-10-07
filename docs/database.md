@@ -1,6 +1,6 @@
 # 資料庫設計
 
-SQLite（`server/schema.sql`），啟動時自動建立。所有業務表都有 `teacher_id`，API 每次查詢都以登入老師的 id 篩選。
+SQLite／Turso libSQL（`server/schema.js`），第一次運行時自動建立及升級。所有業務表都有 `teacher_id`，API 每次查詢都以登入老師的 id 篩選。
 
 ```mermaid
 erDiagram
@@ -29,7 +29,8 @@ erDiagram
 
 | 表 | 用途 | 重點欄位／約束 |
 |---|---|---|
-| `teachers` | 老師帳戶 | `email` UNIQUE；`password_hash` = scrypt |
+| `teachers` | 老師帳戶 | `email` UNIQUE；`password_hash` = scrypt（任何 API 都不會傳回）；`is_admin`；`last_login_at`／`last_seen_at`（管理員可見） |
+| `login_attempts` | 登入失敗紀錄 | 15 分鐘內同一電郵＋IP 最多 10 次 |
 | `sessions` | 登入工作階段 | 只存 token 的 SHA-256；30 日到期 |
 | `settings` | 每位老師的設定 | `thresholds` JSON：`{baby, junior, adult, evolved}`；`timer_presets`；`hunger_days`（幾多個上課日冇加分寵物會肚餓，0 = 關閉；最後餵食時間由 `pet_xp_ledger` 即時計出） |
 | `classes` | 班別 | `name`、`school_year`、`seat_cols`（座位表每行座位數） |

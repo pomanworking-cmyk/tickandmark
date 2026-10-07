@@ -46,6 +46,7 @@ function shell(active, body, { wide = false } = {}) {
         <a class="brand" href="#/classes"><span class="brand-mark">${ICON.tick}</span><span>Tick and Mark</span></a>
         ${c ? `<select class="input class-switch" id="class-switch" aria-label="切換班別">${classes.map(x => `<option value="${x.id}"${x.id === c.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : ''}
         <span class="spacer"></span>
+        ${state.teacher?.is_admin ? '<a class="btn ghost sm" href="#/admin">🛡️ 管理</a>' : ''}
         <a class="btn ghost sm" href="#/settings">設定</a>
       </div>
       ${c ? `<nav class="tabs">${TABS.map(([k, l]) => `<a class="tab" href="#/c/${c.id}/${k}"${k === active ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>` : ''}
@@ -79,6 +80,7 @@ async function route() {
     }
     if (parts[0] === 's') return renderStudent(Number(parts[1]));
     if (parts[0] === 'settings') return renderSettings();
+    if (parts[0] === 'admin') return renderAdmin();
     return renderHome();
   } catch (e) {
     if (e.status === 404 && parts[0] === 'c') { state.classId = null; state.cls = null; toast(e.message, { error: true }); return go('#/classes'); }
@@ -1352,6 +1354,44 @@ async function renderStudent(id) {
       <div class="species-pick">${SPECIES.map(sp => `<button data-sw="${sp.key}" aria-pressed="${sp.key === pet.species_key}">${dexImage(sp.key, 'egg')}${esc(sp.name)}</button>`).join('')}</div>`);
     dd.onclick = async (e) => { const b = e.target.closest('[data-sw]'); if (!b) return; try { await PATCH(`/pets/${pet.id}`, { species_key: b.dataset.sw }); dd.close(); await reloadClass(); renderStudent(id); } catch (err) { fail(err); } };
   };
+}
+
+// ---------- 管理員 ----------
+function ago(iso) {
+  if (!iso) return '從未';
+  const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
+  if (m < 2) return '剛剛'; if (m < 60) return `${m} 分鐘前`;
+  const h = Math.round(m / 60); if (h < 24) return `${h} 小時前`;
+  const d = Math.round(h / 24); return d < 30 ? `${d} 日前` : fmtDate(iso);
+}
+async function renderAdmin() {
+  if (!state.teacher?.is_admin) return go('#/classes');
+  state.cls = null; state.classId = null;
+  const t = navSeq; const { teachers } = await GET('/admin/teachers'); if (t !== navSeq) return;
+  const weekAgo = Date.now() - 7 * 864e5;
+  const active = teachers.filter(x => x.last_seen_at && Date.parse(x.last_seen_at) >= weekAgo).length;
+  const sum = (k) => teachers.reduce((a, x) => a + (x[k] || 0), 0);
+  shell(null, `
+    <div class="page-head"><a class="btn ghost sm" href="#/classes">← 班別</a><h1>🛡️ 管理員</h1></div>
+    <p class="admin-note">管理員只可以睇到老師帳戶嘅使用情況同開咗邊啲班；睇唔到任何密碼、學生姓名、分數或者功課紀錄。</p>
+    <div class="admin-stats">
+      <div><b class="num">${teachers.length}</b><span>位老師</span></div>
+      <div><b class="num">${active}</b><span>近 7 日有使用</span></div>
+      <div><b class="num">${sum('class_count')}</b><span>個班別</span></div>
+      <div><b class="num">${sum('student_count')}</b><span>位學生（只計人數）</span></div>
+    </div>
+    <div class="admin-list">${teachers.map(x => `<section class="panel admin-teacher">
+      <div class="at-head"><div><h2>${esc(x.name)} ${x.is_admin ? '<span class="chip blue">管理員</span>' : ''}</h2><div class="muted small">${esc(x.email)}・${fmtDate(x.created_at)} 註冊</div></div>
+        <span class="chip ${x.last_seen_at && Date.parse(x.last_seen_at) >= weekAgo ? 'good' : ''}">最後使用：${esc(ago(x.last_seen_at))}</span></div>
+      <div class="at-grid">
+        <div><span>最後登入</span><b>${esc(ago(x.last_login_at))}</b></div>
+        <div><span>最後加分</span><b>${esc(ago(x.last_points_at))}</b></div>
+        <div><span>近 7 日加分次數</span><b class="num">${x.actions_7d}</b></div>
+        <div><span>近 30 日加分次數</span><b class="num">${x.actions_30d}</b></div>
+      </div>
+      <div class="section-label">班別（${x.class_count}）</div>
+      <div class="row">${x.classes.map(c => `<span class="chip">${esc(c.name)}${c.school_year ? ` <span class="muted">${esc(c.school_year)}</span>` : ''}・${c.student_count} 人・${fmtDate(c.created_at)} 開</span>`).join('') || '<span class="muted small">未開班</span>'}</div>
+    </section>`).join('')}</div>`);
 }
 
 // ---------- 設定 ----------

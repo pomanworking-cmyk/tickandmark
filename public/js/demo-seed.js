@@ -47,5 +47,14 @@ export async function seedDemo(be) {
   const backdate = (sid, days) => S.score_events.filter(e => e.student_id === sid).forEach(e => { e.created_at = ago(days); });
   [full.students[9], full.students[10]].forEach(s => backdate(s.id, 6));   // 肚餓
   [full.students[11], full.students[13]].forEach(s => backdate(s.id, 11)); // 好肚餓，要主人幫忙
+  // 示範管理員頁：另外兩位虛構老師
+  for (const [email, name, cls, n, acts] of [['ho@tickandmark.hk', '何老師', '2C', 24, 3], ['lam@tickandmark.hk', '林老師', '6D', 30, 0]]) {
+    await r('POST', '/auth/logout');
+    await r('POST', '/auth/register', { email, name, password: 'demo12345' });
+    const c = await r('POST', '/classes', { name: cls, school_year: '2026-27' });
+    const { created } = await r('POST', `/classes/${c.id}/students`, { students: Array.from({ length: n }, (_, i) => ({ number: i + 1, name: `學生${i + 1}` })) });
+    for (let k = 0; k < acts; k++) await r('POST', '/points', { class_id: c.id, student_ids: [created[k].id], delta: 1, client_batch_id: bid() });
+  }
+  S.teachers.find(t => t.email === 'lam@tickandmark.hk').last_seen_at = ago(12);
   await r('POST', '/auth/logout'); // 預覽由登入頁開始
 }
