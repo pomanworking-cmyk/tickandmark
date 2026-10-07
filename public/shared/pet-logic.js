@@ -102,3 +102,30 @@ export function balancedSpecies(count, existingCounts = {}, rand = Math.random) 
   }
   return out;
 }
+
+// ---------- 肚餓提示 ----------
+// 由「最後一次因加分得到 XP」（未有則派蛋日）起計，只數星期一至五（周末唔計），
+// 超過 days 個上課日 → 1（肚餓），超過 2×days → 2（好肚餓，要主人幫忙）。days = 0 代表關閉。
+export function schoolDaysBetween(fromIso, now = new Date()) {
+  const a = new Date(fromIso); a.setHours(0, 0, 0, 0);
+  const b = new Date(now); b.setHours(0, 0, 0, 0);
+  let n = 0;
+  for (const d = new Date(a); d < b; d.setDate(d.getDate() + 1)) {
+    const next = new Date(d); next.setDate(next.getDate() + 1);
+    if (next.getDay() !== 0 && next.getDay() !== 6) n++;
+  }
+  return n;
+}
+export function hungerLevel(pet, days = 3, now = new Date()) {
+  if (!pet || !days) return 0;
+  const since = pet.last_fed_at || pet.assigned_at;
+  if (!since) return 0;
+  const n = schoolDaysBetween(since, now);
+  return n >= days * 2 ? 2 : n >= days ? 1 : 0;
+}
+export function hungerMessage(pet, level) {
+  if (!level) return '';
+  const egg = pet.stage === 'egg';
+  if (level === 1) return egg ? '好凍呀，想主人陪下我～' : '我有啲肚餓呀～';
+  return egg ? '我好凍呀！主人快啲幫我孵化啦！' : '好肚餓呀！主人幫幫我！';
+}

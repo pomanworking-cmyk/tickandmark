@@ -22,5 +22,6 @@ function migrate(db) {
   const cols = (t) => db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
   const has = (t) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t);
   if (has('classes') && !cols('classes').includes('seat_cols')) db.exec('ALTER TABLE classes ADD COLUMN seat_cols INTEGER NOT NULL DEFAULT 6');
+  if (has('settings') && !cols('settings').includes('hunger_days')) db.exec('ALTER TABLE settings ADD COLUMN hunger_days INTEGER NOT NULL DEFAULT 3');
   if (has('students') && !cols('students').includes('seat_row')) db.exec('ALTER TABLE students ADD COLUMN seat_row INTEGER; ALTER TABLE students ADD COLUMN seat_col INTEGER;');
 }

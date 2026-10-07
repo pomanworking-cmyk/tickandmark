@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS settings (
   teacher_id  INTEGER PRIMARY KEY REFERENCES teachers(id) ON DELETE CASCADE,
   thresholds  TEXT NOT NULL,              -- JSON {baby, junior, adult, evolved}
-  timer_presets TEXT NOT NULL DEFAULT '[60,180,300,600]'
+  timer_presets TEXT NOT NULL DEFAULT '[60,180,300,600]',
+  hunger_days INTEGER NOT NULL DEFAULT 3   -- 幾多個上課日冇加分，寵物就會肚餓（0 = 關閉）
 );
 
 CREATE TABLE IF NOT EXISTS classes (

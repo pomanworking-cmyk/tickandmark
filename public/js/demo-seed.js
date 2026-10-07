@@ -41,5 +41,11 @@ export async function seedDemo(be) {
   await r('PUT', `/classes/${first.id}/attendance`, { date: today, absent: [full.students[12].id] });
   const rewards = (await r('GET', '/rewards'));
   await r('POST', '/redemptions', { student_id: full.students[7].id, reward_id: rewards[0].id });
+  // 示範「肚餓」：把派蛋日及部分同學的加分時間推前（只改示範資料）
+  const S = be.state; const ago = (days) => new Date(Date.now() - days * 864e5).toISOString();
+  S.student_pets.forEach(p => { p.assigned_at = ago(20); });
+  const backdate = (sid, days) => S.score_events.filter(e => e.student_id === sid).forEach(e => { e.created_at = ago(days); });
+  [full.students[9], full.students[10]].forEach(s => backdate(s.id, 6));   // 肚餓
+  [full.students[11], full.students[13]].forEach(s => backdate(s.id, 11)); // 好肚餓，要主人幫忙
   await r('POST', '/auth/logout'); // 預覽由登入頁開始
 }

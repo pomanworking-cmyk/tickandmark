@@ -387,6 +387,27 @@ try:
         audit_text = page.inner_text('#audit-out')
         check('資料一致性檢查：全部一致', '全部一致' in audit_text, audit_text)
 
+        # 肚餓寵物：把 6C 的派蛋及加分時間推前 20 日（直接改資料庫模擬）
+        import sqlite3
+        con = sqlite3.connect(db); old = "strftime('%Y-%m-%dT%H:%M:%fZ','now','-20 days')"
+        c6ids = [x['id'] for x in api(page, 'GET', f"/classes/{ids['6C']}/full")['students']]
+        con.execute(f"UPDATE student_pets SET assigned_at = {old} WHERE student_record_id IN ({','.join(map(str, c6ids))})")
+        con.execute(f"UPDATE score_events SET created_at = {old} WHERE student_id IN ({','.join(map(str, c6ids))})"); con.commit(); con.close()
+        page.goto(BASE + '#/classes'); page.goto(BASE + f"#/c/{ids['6C']}/room"); wait_js(page, f"document.getElementById('class-switch')?.value === '{ids['6C']}' && !!document.querySelector('#room-grid .stu')")
+        page.reload(); page.wait_for_selector('#room-grid .stu')
+        hungry_cards = page.locator('#room-grid .stu.hungry').count()
+        check('肚餓：超過門檻的寵物顯示「幫幫我！」', hungry_cards == 4 and page.locator('#room-grid .hungry-bubble.lv2').count() == 4, str(hungry_cards))
+        check('肚餓：未派蛋學生冇提示', page.locator(f'.stu[data-id="{c6ids[4]}"] .hungry-bubble').count() == 0)
+        page.screenshot(path=f'{OUT}/hungry-room.png', full_page=True)
+        page.click('#hungry-pill'); page.wait_for_selector('dialog [data-feed]'); page.screenshot(path=f'{OUT}/hungry-list.png')
+        page.click(f'dialog [data-feed="{c6ids[0]}"]'); page.wait_for_selector(f'.celebrate .cele-card[data-cele-student="{c6ids[0]}"] .fed-bubble')
+        page.screenshot(path=f'{OUT}/hungry-fed.png')
+        page.click('.celebrate .cele-card')
+        check('餵完即飽：提示消失，其餘仍肚餓', page.locator(f'.stu[data-id="{c6ids[0]}"] .hungry-bubble').count() == 0 and page.locator('#room-grid .stu.hungry').count() == 3)
+        page.goto(BASE + f"#/s/{c6ids[1]}"); page.wait_for_selector('.pet-card .speech')
+        check('學生頁顯示寵物說話', '幫幫我' in page.inner_text('.pet-card .speech') or '孵化' in page.inner_text('.pet-card .speech'), page.inner_text('.pet-card .speech'))
+        page.screenshot(path=f'{OUT}/hungry-student.png', full_page=True)
+
         # 手機及平板
         for name, vp in [('mobile', {'width': 390, 'height': 844}), ('tablet', {'width': 820, 'height': 1180})]:
             m = br.new_context(viewport=vp, storage_state=ctx.storage_state(), color_scheme='dark').new_page()  # 系統深色模式下仍應是淺色

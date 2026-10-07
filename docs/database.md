@@ -31,7 +31,7 @@ erDiagram
 |---|---|---|
 | `teachers` | 老師帳戶 | `email` UNIQUE；`password_hash` = scrypt |
 | `sessions` | 登入工作階段 | 只存 token 的 SHA-256；30 日到期 |
-| `settings` | 每位老師的設定 | `thresholds` JSON：`{baby, junior, adult, evolved}`；`timer_presets` |
+| `settings` | 每位老師的設定 | `thresholds` JSON：`{baby, junior, adult, evolved}`；`timer_presets`；`hunger_days`（幾多個上課日冇加分寵物會肚餓，0 = 關閉；最後餵食時間由 `pet_xp_ledger` 即時計出） |
 | `classes` | 班別 | `name`、`school_year`、`seat_cols`（座位表每行座位數） |
 | `groups` | 小組 | `color` |
 | `students` | 學生 | `number`（班號）、`group_id`、`seat_row`／`seat_col`（座位，NULL＝未編位，自動按班號補位）、`score`（總分快取，＝未撤銷 `score_events.delta` 總和） |

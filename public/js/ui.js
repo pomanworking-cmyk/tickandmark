@@ -80,7 +80,7 @@ export function confirmBox(message, { ok = '確定', danger = false } = {}) {
 
 // ---------- 加分祝賀彈窗 ----------
 const stageWord = (from, to) => (from === 'egg' ? '孵化了！' : `進化成${STAGE_LABELS[to]}！`);
-export function celebrate(results, { label, thresholds, quick = false }) {
+export function celebrate(results, { label, thresholds, quick = false, fed = new Set() }) {
   const pos = results.filter(r => r.delta > 0);
   if (!pos.length) return showDeduction(results, { label, quick });
   document.querySelector('.celebrate')?.remove();
@@ -93,6 +93,7 @@ export function celebrate(results, { label, thresholds, quick = false }) {
     const pa = r.pet ? progressInfo(r.pet, thresholds) : null;
     inner = `<div class="cele-card" data-cele-student="${r.student_id}">
       ${avatar(st)}
+      ${fed.has(r.student_id) ? `<div class="fed-bubble">${r.pet?.stage === 'egg' ? '好暖呀，多謝主人！🥰' : '多謝主人！我食飽喇～😋'}</div>` : ''}
       <div class="who">${esc(r.name)}</div>
       <div class="delta num">+${r.delta}</div>
       <div class="what">${esc(label || '')}</div>
@@ -104,7 +105,7 @@ export function celebrate(results, { label, thresholds, quick = false }) {
     inner = `<div class="cele-card" style="width:min(640px,100%)">
       <div class="delta num">+${pos[0].delta}</div><div class="what">${esc(label || '')} · ${pos.length} 位同學</div>
       <div class="cele-multi">${pos.map((r, i) => `<div class="m" style="animation-delay:${Math.min(i, 20) * 40}ms" data-cele-student="${r.student_id}">
-        ${avatar({ id: r.student_id, name: r.name, pet: r.pet })}<b>${esc(r.name)}</b>${r.leveled_up ? `<span class="lv">${esc(stageWord(r.stage_before, r.stage_after))}</span>` : ''}</div>`).join('')}</div>
+        ${avatar({ id: r.student_id, name: r.name, pet: r.pet })}<b>${esc(r.name)}</b>${fed.has(r.student_id) ? '<span class="lv fed">食飽喇 😋</span>' : ''}${r.leveled_up ? `<span class="lv">${esc(stageWord(r.stage_before, r.stage_after))}</span>` : ''}</div>`).join('')}</div>
     </div>`;
   }
   el.innerHTML = inner;

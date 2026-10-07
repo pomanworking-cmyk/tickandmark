@@ -54,13 +54,15 @@ export function createApi(db) {
   const petRow = (p) => p && ({
     id: p.id, student_record_id: p.student_record_id, species_key: p.species_key, stage: p.stage,
     xp: p.xp, baseline_event_id: p.baseline_event_id, nickname: p.nickname,
-    accessories: JSON.parse(p.accessories || '[]'), assigned_at: p.assigned_at, hatched_at: p.hatched_at,
+    accessories: JSON.parse(p.accessories || '[]'), assigned_at: p.assigned_at, hatched_at: p.hatched_at, last_fed_at: p.last_fed_at ?? null,
   });
-  const petOf = (studentId) => petRow(db.prepare('SELECT * FROM student_pets WHERE student_record_id = ?').get(studentId));
+  const PET_SELECT = `SELECT p.*, (SELECT MAX(e.created_at) FROM pet_xp_ledger l JOIN score_events e ON e.id = l.score_event_id
+      WHERE l.pet_id = p.id AND l.reversed_at IS NULL) AS last_fed_at FROM student_pets p`;
+  const petOf = (studentId) => petRow(db.prepare(`${PET_SELECT} WHERE p.student_record_id = ?`).get(studentId));
   const studentsOf = (classId) => {
     const rows = db.prepare(`SELECT s.*, (SELECT COALESCE(SUM(cost),0) FROM redemptions r WHERE r.student_id = s.id AND r.undone_at IS NULL) AS spent
       FROM students s WHERE s.class_id = ? ORDER BY s.number IS NULL, s.number, s.id`).all(classId);
-    const pets = db.prepare('SELECT p.* FROM student_pets p JOIN students s ON s.id = p.student_record_id WHERE s.class_id = ?').all(classId);
+    const pets = db.prepare(`${PET_SELECT} JOIN students s ON s.id = p.student_record_id WHERE s.class_id = ?`).all(classId);
     const byStudent = new Map(pets.map(p => [p.student_record_id, petRow(p)]));
     return rows.map(s => ({ ...s, pet: byStudent.get(s.id) || null }));
   };
@@ -73,6 +75,7 @@ export function createApi(db) {
   // ---------- 啟動資料 ----------
   on('GET', '/bootstrap', ({ tid }) => ({
     thresholds: thresholdsOf(tid),
+    hunger_days: db.prepare('SELECT hunger_days FROM settings WHERE teacher_id = ?').get(tid)?.hunger_days ?? 3,
     timer_presets: JSON.parse(db.prepare('SELECT timer_presets FROM settings WHERE teacher_id = ?').get(tid)?.timer_presets || '[60,180,300,600]'),
     tags: db.prepare('SELECT * FROM behavior_tags WHERE teacher_id = ? ORDER BY sort, id').all(tid),
     classes: listClasses(tid),
@@ -515,6 +518,10 @@ export function createApi(db) {
     let upgraded = 0;
     tx(db, () => {
       db.prepare('UPDATE settings SET thresholds = ? WHERE teacher_id = ?').run(JSON.stringify(th), tid);
+      if (body.hunger_days !== undefined) {
+        const hd = int(body.hunger_days); if (!(hd >= 0 && hd <= 30)) throw bad('肚餓提示日數須為 0 至 30（0 = 關閉）');
+        db.prepare('UPDATE settings SET hunger_days = ? WHERE teacher_id = ?').run(hd, tid);
+      }
       if (Array.isArray(body.timer_presets)) db.prepare('UPDATE settings SET timer_presets = ? WHERE teacher_id = ?').run(JSON.stringify(body.timer_presets.map(int).filter(n => n > 0 && n <= 7200).slice(0, 8)), tid);
       for (const pet of db.prepare('SELECT * FROM student_pets WHERE teacher_id = ?').all(tid)) {
         const st = nextStage(pet.stage, pet.xp, th);
@@ -524,7 +531,7 @@ export function createApi(db) {
         }
       }
     });
-    return { thresholds: th, upgraded };
+    return { thresholds: th, upgraded, hunger_days: db.prepare('SELECT hunger_days FROM settings WHERE teacher_id = ?').get(tid).hunger_days };
   });
 
   // 資料一致性自我檢查（驗收用）

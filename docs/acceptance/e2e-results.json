@@ -37,7 +37,7 @@
  [
   "4A 平均派蛋（八款中每款 1–2 隻）",
   true,
-  "['earth_bear', 'earth_bear', 'fire_fox', 'metal_bird', 'metal_bird', 'metal_cat', 'water_koi', 'water_koi', 'water_otter', 'water_otter', 'wood_deer', 'wood_rabbit']"
+  "['earth_bear', 'earth_bear', 'fire_fox', 'metal_bird', 'metal_bird', 'metal_cat', 'water_koi', 'water_otter', 'water_otter', 'wood_deer', 'wood_rabbit', 'wood_rabbit']"
  ],
  [
   "4B 第一位資料是土熊蛋",
@@ -62,7 +62,7 @@
  [
   "多人加分彈窗：每位學生顯示自己的寵物",
   true,
-  "[{\"s\": \"15\", \"sp\": \"water_koi\", \"st\": \"egg\"}, {\"s\": \"16\", \"sp\": \"water_otter\", \"st\": \"egg\"}, {\"s\": \"17\", \"sp\": \"metal_bird\", \"st\": \"egg\"}]"
+  "[{\"s\": \"15\", \"sp\": \"fire_fox\", \"st\": \"egg\"}, {\"s\": \"16\", \"sp\": \"water_otter\", \"st\": \"egg\"}, {\"s\": \"17\", \"sp\": \"wood_rabbit\", \"st\": \"egg\"}]"
  ],
  [
   "多人加分 XP 各 +2",
@@ -162,7 +162,7 @@
  [
   "隨機抽人：不重複、不抽缺席",
   true,
-  "[22, 19, 15, 21, 18, 16, 20, 13]"
+  "[20, 21, 16, 15, 22, 19, 13, 18]"
  ],
  [
   "抽中後一撳 +1 並彈出",
@@ -187,7 +187,7 @@
  [
   "全班目標：加分計入，達成時彈出慶祝",
   true,
-  "{'goal': {'id': 1, 'title': '全班看電影', 'target': 10, 'created_at': '2026-10-07T13:01:42.231Z'}, 'progress': 12}"
+  "{'goal': {'id': 1, 'title': '全班看電影', 'target': 10, 'created_at': '2026-10-07T13:11:38.778Z'}, 'progress': 12}"
  ],
  [
   "兌換：扣可用分數，總分及寵物 XP 不變",
@@ -207,7 +207,7 @@
  [
   "噪音計：讀到咪高峰聲量",
   true,
-  "{'w': 4.89205, 'msg': '好安靜，好叻！'}"
+  "{'w': 4.46859, 'msg': '好安靜，好叻！'}"
  ],
  [
   "4A 課室模式：12 個頭像與資料庫一致",
@@ -232,7 +232,7 @@
  [
   "4A 張家豪 成長路線只顯示自己的品種",
   true,
-  "{'metal_cat'}"
+  "{'water_koi'}"
  ],
  [
   "4A 學生資料頁 馮凱琳：1 個頭像與資料庫一致",
@@ -242,7 +242,7 @@
  [
   "4A 馮凱琳 成長路線只顯示自己的品種",
   true,
-  "{'earth_bear'}"
+  "{'water_otter'}"
  ],
  [
   "4B 課室模式：10 個頭像與資料庫一致",
@@ -267,7 +267,7 @@
  [
   "4B 馬詩韻 成長路線只顯示自己的品種",
   true,
-  "{'wood_rabbit'}"
+  "{'water_koi'}"
  ],
  [
   "4B 學生資料頁 許俊傑：1 個頭像與資料庫一致",
@@ -332,7 +332,7 @@
  [
   "功課提交紀錄",
   true,
-  "{'id': 2, 'teacher_id': 1, 'class_id': 1, 'title': '周記', 'subject': '中文', 'due_date': '2026-10-15', 'created_at': '2026-10-07T13:01:53.488Z', 'submitted': 11, 'late': 0, 'missing': 1, 'excused': 0}"
+  "{'id': 2, 'teacher_id': 1, 'class_id': 1, 'title': '周記', 'subject': '中文', 'due_date': '2026-10-15', 'created_at': '2026-10-07T13:11:50.052Z', 'submitted': 11, 'late': 0, 'missing': 1, 'excused': 0}"
  ],
  [
   "考試成績平均",
@@ -343,6 +343,26 @@
   "資料一致性檢查：全部一致",
   true,
   "全部一致（已核對 26 隻寵物）"
+ ],
+ [
+  "肚餓：超過門檻的寵物顯示「幫幫我！」",
+  true,
+  "4"
+ ],
+ [
+  "肚餓：未派蛋學生冇提示",
+  true,
+  ""
+ ],
+ [
+  "餵完即飽：提示消失，其餘仍肚餓",
+  true,
+  ""
+ ],
+ [
+  "學生頁顯示寵物說話",
+  true,
+  "我好凍呀！主人快啲幫我孵化啦！\n已經 14 個上課日冇加分"
  ],
  [
   "mobile 無橫向捲動",

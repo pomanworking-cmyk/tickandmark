@@ -152,6 +152,11 @@ async function scenario(c) {
     assert.equal(preStu.pet.stage, 'junior', '調高門檻後不倒退');
     await assert.rejects(c.req('PUT', '/settings', { thresholds: { baby: 10, junior: 5, adult: 20, evolved: 30 } }), /由小至大/);
     await c.req('PUT', '/settings', { thresholds: DEFAULT_THRESHOLDS });
+    const hs = await c.req('PUT', '/settings', { thresholds: DEFAULT_THRESHOLDS, hunger_days: 2 }); assert.equal(hs.hunger_days, 2);
+    assert.equal((await c.req('GET', '/bootstrap')).hunger_days, 2);
+    await assert.rejects(c.req('PUT', '/settings', { thresholds: DEFAULT_THRESHOLDS, hunger_days: 99 }), /0 至 30/);
+    const fedPet = (await c.req('GET', `/students/${pre.id}`)).student.pet;
+    assert.ok(fedPet.last_fed_at, '有加分的寵物記錄最後餵食時間');
 
     // 功課及考試
     const hw = await c.req('POST', `/classes/${classes['4A'].id}/homework`, { title: '中文作文', subject: '中文', due_date: '2026-10-09' });
@@ -318,4 +323,18 @@ test('舊資料庫自動升級（加入座位欄位）', async () => {
   assert.ok(cols('classes').includes('seat_cols') && cols('students').includes('seat_row') && cols('students').includes('seat_col'));
   assert.equal(db.prepare('SELECT seat_cols FROM classes WHERE id = 1').get().seat_cols, 6);
   db.close();
+});
+
+test('寵物肚餓：只數上課日，加分後即飽', async () => {
+  const { hungerLevel, schoolDaysBetween, hungerMessage } = await import('../public/shared/pet-logic.js');
+  // 2026-10-09 是星期五；到下星期二（10-13）只隔 2 個上課日（一、二），周末不計
+  assert.equal(schoolDaysBetween('2026-10-09T09:00:00+08:00', new Date('2026-10-13T10:00:00+08:00')), 2);
+  const pet = { stage: 'baby', assigned_at: '2026-10-01T09:00:00+08:00', last_fed_at: '2026-10-09T09:00:00+08:00' };
+  assert.equal(hungerLevel(pet, 3, new Date('2026-10-13T10:00:00+08:00')), 0);
+  assert.equal(hungerLevel(pet, 3, new Date('2026-10-14T10:00:00+08:00')), 1);
+  assert.equal(hungerLevel(pet, 3, new Date('2026-10-21T10:00:00+08:00')), 2);
+  assert.equal(hungerLevel(pet, 0, new Date('2026-10-21T10:00:00+08:00')), 0, '0 = 關閉');
+  assert.equal(hungerLevel({ ...pet, last_fed_at: null }, 3, new Date('2026-10-06T10:00:00+08:00')), 1, '未加過分就由派蛋日起計');
+  assert.match(hungerMessage({ stage: 'egg' }, 2), /孵化/);
+  assert.match(hungerMessage({ stage: 'adult' }, 2), /幫幫我/);
 });

@@ -1,7 +1,7 @@
 // Tick and Mark 前端（繁體中文單頁應用）
 import { GET, POST, PUT, PATCH, DEL, uid, IS_DEMO } from './api.js';
 import { esc, $, $$, avatar, dexImage, xpBar, petStatus, toast, openDialog, confirmBox, celebrate, ICON, fmtDate, fmtTime, signed } from './ui.js';
-import { SPECIES, STAGES, STAGE_LABELS, speciesByKey, petLabel, progressInfo } from '../shared/pet-logic.js';
+import { SPECIES, STAGES, STAGE_LABELS, speciesByKey, petLabel, progressInfo, hungerLevel, hungerMessage, schoolDaysBetween } from '../shared/pet-logic.js';
 import { readFileToStudents, textToStudents, ocrImage } from './importer.js';
 
 const app = document.getElementById('app');
@@ -91,6 +91,18 @@ async function loadRoomExtras() {
   state.absent = new Set(att.absent); state.attDate = date; state.goal = goal;
 }
 const present = () => students().filter(s => !state.absent.has(s.id));
+const hungerDays = () => state.boot?.hunger_days ?? 3;
+const hungerOf = (s) => hungerLevel(s?.pet, hungerDays());
+const hungryList = () => students().filter(s => hungerOf(s) > 0).sort((a, b) => hungerOf(b) - hungerOf(a) || byNumber(a, b));
+function hungerBubble(s, big = false) {
+  const lv = hungerOf(s); if (!lv) return '';
+  if (big) {
+    const n = schoolDaysBetween(s.pet.last_fed_at || s.pet.assigned_at);
+    return `<div class="speech lv${lv}">${esc(hungerMessage(s.pet, lv))}<small>已經 ${n} 個上課日冇加分</small></div>`;
+  }
+  const egg = s.pet.stage === 'egg';
+  return `<span class="hungry-bubble lv${lv}">${lv === 2 ? '幫幫我！' : egg ? '好凍～' : '肚餓～'}</span>`;
+}
 async function reloadClass() { state.cls = await GET(`/classes/${state.classId}/full`); }
 async function reloadBoot() { state.boot = await GET('/bootstrap'); }
 
@@ -153,6 +165,7 @@ function renderHome() {
 // ---------- 加減分 ----------
 async function givePoints(ids, { delta, tag, reason, quick = false }) {
   const body = { class_id: state.classId, student_ids: [...ids], client_batch_id: uid(), ...(tag ? { tag_id: tag.id } : { delta, reason }) };
+  const hungryBefore = new Set([...ids].filter(id => hungerOf(students().find(x => x.id === id)) > 0));
   let res;
   try { res = await POST('/points', body); }
   catch (e) { if (e.status === 0) res = await POST('/points', body); else throw e; } // 斷線重送：同一操作編號，不會重複加分
@@ -162,7 +175,9 @@ async function givePoints(ids, { delta, tag, reason, quick = false }) {
   }
   const label = res.label;
   const d = res.results[0]?.delta ?? 0;
-  celebrate(res.results, { label, thresholds: thresholds(), quick });
+  const fed = new Set(res.results.filter(r => r.xp_gained > 0 && hungryBefore.has(r.student_id)).map(r => r.student_id));
+  celebrate(res.results, { label, thresholds: thresholds(), quick, fed });
+  if (fed.size) drawHungryPill();
   const names = res.results.length > 3 ? `${res.results.length} 位同學` : res.results.map(r => r.name).join('、');
   toast(`${names} ${signed(d)}（${label}）`, { action: () => undoBatch(res.batch_id), actionLabel: '撤銷' });
   if (d > 0) refreshGoal().catch(() => {});
@@ -296,6 +311,7 @@ function renderRoom() {
       <button class="tool" data-act="regroup">👥 分組</button>
       <button class="tool" data-act="rewards">🎁 兌換</button>
       <button class="tool" data-act="recent">🕘 最近操作</button>
+      <button class="tool hungry-pill" data-act="hungry" id="hungry-pill" hidden></button>
       <button class="goal-pill" data-act="goal" id="goal-pill"></button>
     </div>
     <div class="mode-tabs" role="tablist" aria-label="模式">${[['points', '⭐ 加分'], ['attend', '📋 點名'], ['hw', '📥 收功課'], ['seats', '🪑 編排座位']].map(([k, l]) => `<button class="mode-tab" role="tab" data-act="mode" data-m="${k}" aria-pressed="${room.mode === k}">${l}</button>`).join('')}</div>
@@ -330,6 +346,7 @@ function renderRoom() {
   ACT.regroup = () => openRegroup();
   ACT.rewards = () => openRewards();
   ACT.goal = () => openGoal();
+  ACT.hungry = () => openHungry();
   ACT.hwset = (el) => { room.hwStatus = el.dataset.v; drawQuickBar(); };
   ACT.hwnew = () => newHomeworkQuick();
   ACT.hwfill = (el) => hwFill(el.dataset.v);
@@ -376,7 +393,28 @@ function renderRoom() {
     students().slice().sort(byNumber).forEach((s, i) => pos.set(s.id, [Math.floor(i / cols), i % cols]));
     saveSeats(pos, cols);
   };
-  drawQuickBar(); drawGroupRow(); drawGoalPill(); drawRoomGrid();
+  drawQuickBar(); drawGroupRow(); drawGoalPill(); drawHungryPill(); drawRoomGrid();
+}
+function drawHungryPill() {
+  const el = $('#hungry-pill'); if (!el) return;
+  const n = hungryList().length; el.hidden = !n;
+  el.innerHTML = `🍙 肚餓寵物 <b class="num">${n}</b>`;
+}
+function openHungry() {
+  const list = hungryList();
+  const d = openDialog(`<div class="sheet-head"><h2>🍙 肚餓寵物</h2><button class="btn ghost" data-close>✕</button></div>
+    <p class="muted small" style="margin-top:0">${hungerDays()} 個上課日冇加分（周末唔計）嘅寵物會肚餓；${hungerDays() * 2} 日或以上會叫主人幫忙。學生只要得到加分就會即刻食飽。</p>
+    ${list.length ? `<div class="stack" style="gap:6px">${list.map(s => `<div class="status-row">${avatar(s, 46)}<span class="who">${s.number ?? ''} ${esc(s.name)}<br><span class="small ${hungerOf(s) === 2 ? 'hungry-text2' : 'muted'}">${esc(hungerMessage(s.pet, hungerOf(s)))}・${schoolDaysBetween(s.pet.last_fed_at || s.pet.assigned_at)} 個上課日</span></span>
+      ${state.absent.has(s.id) ? '<span class="chip">缺席</span>' : `<button class="btn sm" data-feed="${s.id}">+1 餵佢</button>`}</div>`).join('')}</div>
+      <div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn primary" data-feedall>全部出席同學 +1</button></div>` : '<div class="empty">全部寵物都食飽晒 😋</div>'}`);
+  d.addEventListener('click', async (e) => {
+    const one = e.target.closest('[data-feed]'); const all = e.target.closest('[data-feedall]');
+    if (!one && !all) return;
+    const ids = one ? [Number(one.dataset.feed)] : list.filter(s => !state.absent.has(s.id)).map(s => s.id);
+    if (!ids.length) return;
+    d.close();
+    try { await givePoints(ids, { delta: 1, reason: '照顧肚餓寵物', quick: true }); drawRoomGrid(); drawGroupRow(); drawHungryPill(); } catch (err) { fail(err); }
+  });
 }
 
 // 一撳即加：直接給分並彈出祝賀畫面
@@ -448,12 +486,13 @@ function bindSeatDrag(grid) {
 function stuCard(s, rc) {
   const g = groupOf(s);
   const absent = state.absent.has(s.id);
-  const cls = ['stu', room.sel.has(s.id) ? 'sel' : '', room.edit && room.pick === s.id ? 'picked' : '', absent ? 'absent' : ''].filter(Boolean).join(' ');
+  const hl = hungerOf(s);
+  const cls = ['stu', room.sel.has(s.id) ? 'sel' : '', room.edit && room.pick === s.id ? 'picked' : '', absent ? 'absent' : '', hl ? `hungry h${hl}` : ''].filter(Boolean).join(' ');
   const hw = room.mode === 'hw' ? room.hwMap.get(s.id) : null;
   const badge = absent ? '<span class="ribbon absent">缺席</span>' : hw ? `<span class="ribbon hw-${hw}">${HW_LABEL[hw]}</span>` : '';
   return `<div class="${cls}" role="button" tabindex="0" data-act="stu" data-id="${s.id}"${rc ? ` data-r="${rc[0]}" data-c="${rc[1]}"` : ''} ${g ? `style="--gc:${esc(g.color)}"` : ''} aria-label="${esc(s.name)}，${s.score} 分">
     <span class="no">${s.number ?? ''}</span><span class="sc${s.score < 0 ? ' neg' : ''}">${s.score}</span>
-    ${avatar(s)}<span class="nm">${esc(s.name)}</span>${g ? '<span class="gbar"></span>' : ''}${badge}</div>`;
+    ${hl && !absent ? hungerBubble(s) : ''}${avatar(s)}<span class="nm">${esc(s.name)}</span>${g ? '<span class="gbar"></span>' : ''}${badge}</div>`;
 }
 function drawRoomGrid() {
   const grid = $('#room-grid'); if (!grid) return;
@@ -1145,7 +1184,7 @@ function renderPets() {
       <button class="btn primary" data-act="assign" style="margin-top:12px">派蛋給已選學生</button></section>` : ''}
     <section class="panel"><h2>全班寵物</h2>
       <div class="pet-list">${list.filter(s => s.pet).map(s => `<a class="pet-item" href="#/s/${s.id}">${avatar(s)}<span class="info"><b>${s.number ?? ''} ${esc(s.name)}</b>
-        <span class="small muted">${esc(petLabel(s.pet))}${s.pet.nickname ? `「${esc(s.pet.nickname)}」` : ''} · XP ${s.pet.xp}</span>${xpBar(s.pet, th)}</span></a>`).join('') || '<div class="empty">未有學生獲派蛋</div>'}</div></section>
+        <span class="small muted">${esc(petLabel(s.pet))}${s.pet.nickname ? `「${esc(s.pet.nickname)}」` : ''} · XP ${s.pet.xp}${hungerOf(s) ? ` · <span class="${hungerOf(s) === 2 ? 'hungry-text2' : 'hungry-text'}">${hungerOf(s) === 2 ? '好肚餓' : '肚餓'}</span>` : ''}</span>${xpBar(s.pet, th)}</span></a>`).join('') || '<div class="empty">未有學生獲派蛋</div>'}</div></section>
     <section class="panel"><h2>寵物圖鑑</h2><p class="muted small">數字是本班處於該階段的寵物數目。</p>
       <div class="dex">${SPECIES.map(sp => `<div class="dex-row"><div class="sp">${esc(sp.name)}<small>${sp.element}屬性</small></div>
         ${STAGES.map(st => `<div class="dex-cell">${dexImage(sp.key, st)}<div>${STAGE_LABELS[st]} <b>${counts[`${sp.key}/${st}`] || 0}</b></div></div>`).join('')}</div>`).join('')}</div></section>`);
@@ -1224,8 +1263,8 @@ async function renderStudent(id) {
       <h1>${s.number ?? ''} ${esc(s.name)}</h1><span class="chip gold num" style="font-size:1.1rem">${s.score} 分</span>${s.spent ? `<span class="chip good">可用 ${s.score - s.spent}・已兌換 ${s.spent}</span>` : ''}
       <button class="btn primary" data-act="give">加減分</button></div>
     <div class="profile">
-      <section class="pet-card">
-        ${avatar(s)}
+      <section class="pet-card${hungerOf(s) ? ' hungry h' + hungerOf(s) : ''}">
+        ${pet ? hungerBubble(s, true) : ''}${avatar(s)}
         ${pet ? `<h2>${esc(petLabel(pet))}${pet.nickname ? `「${esc(pet.nickname)}」` : ''}</h2>
           <div class="muted small">${esc(speciesByKey[pet.species_key].element)}屬性 · 派蛋於 ${fmtDate(pet.assigned_at)}${pet.hatched_at ? ` · 孵化於 ${fmtDate(pet.hatched_at)}` : ''}</div>
           <div style="display:flex;justify-content:space-between" class="small"><span>XP <b class="num">${pet.xp}</b></span><span>${p.next ? `再 ${p.remaining} XP ${pet.stage === 'egg' ? '孵化' : '成為' + STAGE_LABELS[p.next]}` : '已完全進化'}</span></div>
@@ -1269,6 +1308,8 @@ function renderSettings() {
       <section class="panel"><h2>寵物升級門檻（累積 XP）</h2>
         <form class="stack" data-form="th">
           <div class="row">${['baby', 'junior', 'adult', 'evolved'].map(k => `<label class="field"><span>${{ baby: '孵化成寶寶', junior: '少年', adult: '成年', evolved: '進化' }[k]}</span><input class="input num" id="th-${k}" name="${k}" type="number" min="1" value="${th[k]}" required></label>`).join('')}</div>
+          <label class="field" style="max-width:320px"><span>幾多個上課日冇加分，寵物就會肚餓（周末唔計）</span>
+            <select class="input" id="th-hunger" name="hunger_days">${[0, 2, 3, 4, 5, 7].map(n => `<option value="${n}"${n === hungerDays() ? ' selected' : ''}>${n ? n + ' 日（' + n * 2 + ' 日叫主人幫忙）' : '關閉肚餓提示'}</option>`).join('')}</select></label>
           <p class="muted small" style="margin:0">調低門檻會令已達標的寵物即時升級；調高門檻不會令寵物退化。扣分及撤銷都不會令寵物倒退。</p>
           <button class="btn primary">儲存門檻</button></form></section>
       <section class="panel"><h2>行為標籤</h2>
@@ -1291,7 +1332,9 @@ function renderSettings() {
         <button class="btn" data-act="audit">立即檢查</button><div id="audit-out" style="margin-top:10px"></div></section>
     </div>`);
   ACT['submit:th'] = async (_f, fd) => {
-    const r = await PUT('/settings', { thresholds: Object.fromEntries([...fd].map(([k, v]) => [k, Number(v)])) });
+    const all = Object.fromEntries([...fd].map(([k, v]) => [k, Number(v)]));
+    const { hunger_days, ...thr } = all;
+    const r = await PUT('/settings', { thresholds: thr, hunger_days });
     await reloadBoot(); state.cls = null; state.classId = null; toast(r.upgraded ? `已儲存，${r.upgraded} 隻寵物即時升級` : '已儲存門檻'); renderSettings();
   };
   ACT['submit:newtag'] = async (_f, fd) => { await POST('/tags', Object.fromEntries(fd)); await reloadBoot(); renderSettings(); };

@@ -523,3 +523,48 @@ dialog.full .sheet { background: var(--bg); background-image: radial-gradient(#f
 .ribbon { bottom: auto; top: calc(var(--card) * .52); box-shadow: 0 1px 0 rgba(0,0,0,.05); }
 .seat-scroll .ribbon { font-size: .68rem; padding: 0 6px; }
 .jar-wrap > div:last-child { flex: 1 1 220px; min-width: 0; }
+
+/* ===== 肚餓寵物 ===== */
+.hungry-bubble { position: absolute; top: -10px; left: 50%; transform: translateX(-50%); z-index: 3; white-space: nowrap; font-size: .72rem; font-weight: 800;
+  background: #fff; color: #b5651d; border: 2px solid #ffd59e; border-radius: 999px; padding: 1px 8px; box-shadow: 0 2px 0 #ffe7c4; animation: beg 2.2s ease-in-out infinite; }
+.hungry-bubble::after { content: ""; position: absolute; left: 50%; bottom: -6px; width: 8px; height: 8px; background: #fff; border-right: 2px solid #ffd59e; border-bottom: 2px solid #ffd59e; transform: translateX(-50%) rotate(45deg); }
+.hungry-bubble.lv2 { color: #c2405c; border-color: #ffb3c2; box-shadow: 0 2px 0 #ffd3dc; }
+.hungry-bubble.lv2::after { border-color: #ffb3c2; }
+@keyframes beg { 0%, 100% { transform: translateX(-50%) translateY(0); } 50% { transform: translateX(-50%) translateY(-3px); } }
+.stu.hungry .avatar img { animation: droop 2.6s ease-in-out infinite; transform-origin: 50% 90%; }
+.stu.hungry.h2 .avatar img { filter: saturate(.75) drop-shadow(0 3px 4px rgba(29,38,56,.15)); }
+@keyframes droop { 0%, 100% { transform: rotate(0) translateY(0); } 50% { transform: rotate(-3deg) translateY(2px); } }
+.hungry-pill { border-color: #ffd59e; background: #fff8ec; color: #9a5512; }
+.hungry-text { color: #b5651d; font-weight: 700; }
+.hungry-text2 { color: #c2405c; font-weight: 800; }
+.speech { position: relative; justify-self: center; background: #fff; border: 2px solid #ffd59e; color: #9a5512; border-radius: 20px; padding: 8px 16px; font-weight: 800; max-width: 100%; animation: beg2 2.4s ease-in-out infinite; }
+.speech small { display: block; font-weight: 600; opacity: .75; }
+.speech::after { content: ""; position: absolute; left: 50%; bottom: -8px; width: 12px; height: 12px; background: #fff; border-right: 2px solid #ffd59e; border-bottom: 2px solid #ffd59e; transform: translateX(-50%) rotate(45deg); }
+.speech.lv2 { border-color: #ffb3c2; color: #c2405c; } .speech.lv2::after { border-color: #ffb3c2; }
+@keyframes beg2 { 50% { transform: translateY(-3px); } }
+.pet-card.hungry > .avatar img { animation: droop 2.6s ease-in-out infinite; }
+.fed-bubble { display: inline-block; background: var(--good-soft); color: var(--good); font-weight: 800; border-radius: 999px; padding: 3px 14px; margin-top: 4px; animation: rise .5s both; }
+.cele-multi .m .lv.fed { background: var(--good-soft); color: var(--good); }
+
+/* ===== 字體縮細（整體細約 10%） ===== */
+html { font-size: 14.5px; }
+body { font-size: 1rem; }
+h1 { font-size: 1.45rem; } h2 { font-size: 1.15rem; } h3 { font-size: 1rem; }
+.btn { min-height: 36px; padding: 6px 12px; }
+.btn.sm { min-height: 30px; padding: 3px 10px; font-size: .88rem; }
+.input, select.input, textarea.input { min-height: 36px; padding: 6px 11px; }
+.tab { padding: 5px 12px; }
+.tool, .qchip, .goal-pill { min-height: 34px; padding: 4px 11px; font-size: .92rem; }
+.mode-tab { min-height: 32px; padding: 4px 12px; font-size: .92rem; }
+.search input { font-size: 1.05rem; min-height: 44px; }
+.stu .nm { font-size: calc(var(--card) * .108); }
+.stu .no { font-size: .85rem; }
+.stu .sc { font-size: .95rem; }
+.group-chip { padding: 4px 6px 4px 11px; font-size: .92rem; }
+.tag-btn { min-height: 48px; padding: 8px; font-size: .95rem; }
+.quick .btn { min-height: 42px; font-size: 1.05rem; }
+.class-card .name { font-size: 1.8rem; }
+.cele-card .who { font-size: 1.35rem; }
+.cele-card .delta { font-size: 2.6rem; }
+.section-label { font-size: .76rem; }
+@media (max-width: 600px) { html { font-size: 14px; } }
