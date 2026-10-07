@@ -6,7 +6,7 @@ const CJK = /[㐀-鿿]/;
 // ---------- CSV ----------
 export function decodeText(buf) {
   const utf = new TextDecoder('utf-8').decode(buf);
-  if (!utf.includes('�')) return utf.replace(/^﻿/, '');
+  if (!utf.includes('\uFFFD')) return utf.replace(/^\uFEFF/, '');
   try { return new TextDecoder('big5').decode(buf); } catch { return utf; } // 香港 Excel 常見 Big5 CSV
 }
 export function parseCsv(text) {
