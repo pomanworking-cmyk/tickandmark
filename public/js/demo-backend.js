@@ -17,7 +17,7 @@ export function createDemoBackend(initial) {
   const S = initial ? clone(initial) : {
     seq: {}, teachers: [], settings: [], classes: [], groups: [], students: [], behavior_tags: [],
     score_batches: [], score_events: [], student_pets: [], pet_xp_ledger: [], homework: [],
-    homework_submissions: [], exams: [], exam_scores: [],
+    homework_submissions: [], exams: [], exam_scores: [], homework_templates: [],
   };
   const nextId = (t) => (S.seq[t] = (S.seq[t] || 0) + 1);
   const insert = (t, row) => { const r = { id: nextId(t), created_at: now(), ...row }; S[t].push(r); return r; };
@@ -42,7 +42,14 @@ export function createDemoBackend(initial) {
     [['專心上課', 1, '👂'], ['積極舉手', 1, '✋'], ['幫助同學', 2, '🤝'], ['功課認真', 2, '📘'],
       ['收拾整齊', 1, '🧹'], ['欠交功課', -1, '📕'], ['不守秩序', -1, '🔇']]
       .forEach(([label, points, icon], sort) => insert('behavior_tags', { teacher_id: tid, label, points, icon, sort }));
+    [['中文作文', '中文'], ['英文默書', '英文'], ['數學工作紙', '數學'], ['常識工作紙', '常識']].forEach(([title, subject]) => addTemplate(tid, title, subject));
   }
+  function addTemplate(tid, title, subject) {
+    if (!S.homework_templates.some(t => t.teacher_id === tid && t.title === title && t.subject === subject)) insert('homework_templates', { teacher_id: tid, title, subject });
+  }
+  const listTemplates = (tid) => S.homework_templates.filter(t => t.teacher_id === tid)
+    .sort((a, b) => (a.subject < b.subject ? -1 : a.subject > b.subject ? 1 : 0) || (a.title < b.title ? -1 : a.title > b.title ? 1 : 0) || a.id - b.id)
+    .map(({ id, title, subject }) => ({ id, title, subject }));
   function listClasses(tid) {
     return S.classes.filter(c => c.teacher_id === tid).sort((a, b) => a.name.localeCompare(b.name)).map(c => {
       const st = S.students.filter(s => s.class_id === c.id);
@@ -70,7 +77,11 @@ export function createDemoBackend(initial) {
   };
 
   on('GET', '/bootstrap', ({ tid }) => ({ thresholds: thresholdsOf(tid), timer_presets: settingsOf(tid).timer_presets,
-    tags: clone(S.behavior_tags.filter(t => t.teacher_id === tid).sort((a, b) => a.sort - b.sort || a.id - b.id)), classes: listClasses(tid) }));
+    tags: clone(S.behavior_tags.filter(t => t.teacher_id === tid).sort((a, b) => a.sort - b.sort || a.id - b.id)), classes: listClasses(tid),
+    homework_templates: listTemplates(tid) }));
+  on('GET', '/homework-templates', ({ tid }) => listTemplates(tid));
+  on('POST', '/homework-templates', ({ tid, body }) => { const title = str(body.title, 60); if (!title) throw bad('請輸入功課名稱'); addTemplate(tid, title, str(body.subject, 20)); return listTemplates(tid); });
+  on('DELETE', '/homework-templates/:id', ({ tid, p }) => { own('homework_templates', p.id, tid); S.homework_templates = S.homework_templates.filter(t => t.id !== p.id); return listTemplates(tid); });
   on('GET', '/classes', ({ tid }) => listClasses(tid));
   on('POST', '/classes', ({ tid, body }) => { const name = str(body.name, 30); if (!name) throw bad('請輸入班別名稱'); return clone(insert('classes', { teacher_id: tid, name, school_year: str(body.school_year, 20) })); });
   on('PATCH', '/classes/:id', ({ tid, p, body }) => { const c = own('classes', p.id, tid); c.name = str(body.name ?? c.name, 30) || c.name; c.school_year = str(body.school_year ?? c.school_year, 20); return clone(c); });
@@ -131,7 +142,7 @@ export function createDemoBackend(initial) {
     return { ok: true };
   });
 
-  on('POST', '/classes/:id/groups', ({ tid, p, body }) => { const c = own('classes', p.id, tid); const name = str(body.name, 20); if (!name) throw bad('請輸入小組名稱'); return clone(insert('groups', { teacher_id: tid, class_id: c.id, name, color: str(body.color, 9) || '#5b8def' })); });
+  on('POST', '/classes/:id/groups', ({ tid, p, body }) => { const c = own('classes', p.id, tid); const name = str(body.name, 20); if (!name) throw bad('請輸入小組名稱'); return clone(insert('groups', { teacher_id: tid, class_id: c.id, name, color: str(body.color, 9) || '#8cc4f5' })); });
   on('PATCH', '/groups/:id', ({ tid, p, body }) => { const g = own('groups', p.id, tid); g.name = str(body.name ?? g.name, 20) || g.name; g.color = str(body.color ?? g.color, 9); return clone(g); });
   on('DELETE', '/groups/:id', ({ tid, p }) => { own('groups', p.id, tid); S.groups = S.groups.filter(g => g.id !== p.id); S.students.forEach(s => { if (s.group_id === p.id) s.group_id = null; }); return { ok: true }; });
   on('PUT', '/groups/:id/members', ({ tid, p, body }) => {

@@ -14,6 +14,15 @@ export const ICON = {
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>',
 };
 
+// 圖片載入失敗時，顯示該品種顏色的圓形及名稱（仍是同一品種，不會換成別的寵物）
+// （用事件捕捉，不用 inline onerror，因伺服器 CSP 禁止 inline script）
+document.addEventListener('error', (e) => {
+  const img = e.target; if (!(img instanceof HTMLImageElement)) return;
+  const box = img.closest('.avatar'); const sp = speciesByKey[box?.dataset.species];
+  if (!box || !sp) return;
+  box.innerHTML = `<span class="initial" style="border-style:solid;border-color:${sp.color};color:${sp.color};font-size:calc(var(--size,72px)*.2)">${esc(sp.name)}</span>`;
+}, true);
+
 // ---------- 寵物頭像：全站只用這一個函數 ----------
 // 有寵物 → 依 StudentPet.species_key + stage 取圖；未派蛋 → 姓名首字。
 export function avatar(student, size) {
@@ -23,11 +32,11 @@ export function avatar(student, size) {
     return `<span class="avatar" data-student="${student?.id ?? ''}" data-species="none" data-stage="none"${style}><span class="initial" aria-label="${esc(student?.name)}（未派蛋）">${esc((student?.name || '?').slice(-1))}</span></span>`;
   }
   if (pet.student_record_id !== student.id) throw new Error('寵物與學生對應錯誤'); // 防止錯配
-  return `<span class="avatar" data-student="${student.id}" data-species="${pet.species_key}" data-stage="${pet.stage}"${style}><img src="${petImageUrl(pet, ASSET_BASE)}" alt="${esc(petLabel(pet))}" loading="lazy" draggable="false"></span>`;
+  return `<span class="avatar" data-student="${student.id}" data-species="${pet.species_key}" data-stage="${pet.stage}"${style}><img src="${petImageUrl(pet, ASSET_BASE)}" alt="${esc(petLabel(pet))}" draggable="false"></span>`;
 }
 // 圖鑑用：品種＋階段（不屬於任何學生）
 export function dexImage(species_key, stage, extraClass = '') {
-  return `<span class="avatar ${extraClass}" data-species="${species_key}" data-stage="${stage}"><img src="${petImageUrl({ species_key, stage }, ASSET_BASE)}" alt="${esc(speciesByKey[species_key].name + STAGE_LABELS[stage])}" loading="lazy"></span>`;
+  return `<span class="avatar ${extraClass}" data-species="${species_key}" data-stage="${stage}"><img src="${petImageUrl({ species_key, stage }, ASSET_BASE)}" alt="${esc(speciesByKey[species_key].name + STAGE_LABELS[stage])}"></span>`;
 }
 export function xpBar(pet, thresholds) {
   if (!pet) return '';

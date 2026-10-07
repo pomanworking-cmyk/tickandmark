@@ -1,44 +1,36 @@
-/* Tick and Mark — 「貼紙簿」風格：粉筆藍底、珊瑚色主操作、金色代表寵物 XP。
-   版面：頂部班別列＋分頁；課室模式是可放大的學生貼紙格。 */
+/* Tick and Mark — 「糖果貼紙簿」：全淺色馬卡龍粉彩，圓角膠囊按鈕，粉紅圓點底紋。
+   版面：頂部班別列＋膠囊分頁；課室模式是可放大的學生貼紙格。只有淺色主題。 */
 :root {
-  --bg: #edf3f8;
-  --bg-deep: #dfe9f2;
+  --bg: #fff7f9;
+  --bg-deep: #ffeef3;
   --surface: #ffffff;
-  --surface-2: #f6f9fc;
-  --ink: #1d2638;
-  --muted: #5d6a80;
-  --line: #d3dde8;
-  --accent: #ff6b4a;        /* 主操作：珊瑚 */
-  --accent-ink: #ffffff;
-  --accent-soft: #ffe6df;
-  --blue: #2f6fd1;
-  --blue-soft: #e1ecfb;
-  --gold: #f0a91c;          /* 寵物 XP */
-  --gold-soft: #fff1cf;
-  --good: #1f9d63;
-  --good-soft: #dcf5e8;
-  --bad: #d93a52;
-  --bad-soft: #fde3e7;
-  --shadow: 0 1px 2px rgba(29, 38, 56, .06), 0 6px 18px rgba(29, 38, 56, .07);
+  --surface-2: #fff5f8;
+  --ink: #4a3b5c;           /* 柔和梅子灰，取代黑色 */
+  --muted: #8c7d9b;
+  --line: #f4dbe5;
+  --accent: #ffb3c7;        /* 主操作：蜜桃粉 */
+  --accent-ink: #5a2a4a;
+  --accent-strong: #f27a9b;
+  --accent-soft: #ffe6ee;
+  --blue: #4f8fd6;
+  --blue-soft: #e4f1ff;
+  --sky: #bfe0ff;
+  --gold: #ffc94d;          /* 寵物 XP */
+  --gold-soft: #fff5d6;
+  --good: #34a877;
+  --good-soft: #dcf7ea;
+  --bad: #e2607c;
+  --bad-soft: #ffe4ea;
+  --lav: #cbb8f5;
+  --lav-soft: #f2edff;
+  --mint: #c4f0de;
+  --shadow: 0 3px 0 #f8e1ea, 0 10px 24px rgba(240, 130, 165, .12);
   --font-ui: "Chiron Hei HK", "PingFang HK", "Noto Sans HK", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-display: "Huninn", "Chiron Hei HK", "PingFang HK", "Microsoft JhengHei", sans-serif;
   --font-num: "Baloo 2", "Chiron Hei HK", system-ui, sans-serif;
-  --r: 14px;
+  --r: 20px;
   --card: 132px;
   color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #121925; --bg-deep: #0d131c; --surface: #1b2433; --surface-2: #222d3f; --ink: #eef2f8; --muted: #a3afc2;
-    --line: #2f3b50; --accent: #ff8366; --accent-ink: #1b0d08; --accent-soft: #3d2620; --blue: #7aa7f0; --blue-soft: #1f2d45;
-    --gold: #f6bd47; --gold-soft: #3a3016; --good: #4fd193; --good-soft: #173527; --bad: #ff6f86; --bad-soft: #3d1c24;
-    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 22px rgba(0,0,0,.28); color-scheme: dark;
-  }
-}
-:root[data-theme="dark"] {
-  --bg: #121925; --bg-deep: #0d131c; --surface: #1b2433; --surface-2: #222d3f; --ink: #eef2f8; --muted: #a3afc2;
-  --line: #2f3b50; --accent: #ff8366; --accent-ink: #1b0d08; --accent-soft: #3d2620; --blue: #7aa7f0; --blue-soft: #1f2d45;
-  --gold: #f6bd47; --gold-soft: #3a3016; --good: #4fd193; --good-soft: #173527; --bad: #ff6f86; --bad-soft: #3d1c24;
-  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 22px rgba(0,0,0,.28); color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -294,7 +286,7 @@ dialog.full .sheet { height: 100%; max-height: none; border-radius: 0; display: 
 .auth-eggs .avatar { --size: 58px; margin: 0 -6px; }
 
 @media (max-width: 600px) {
-  .size-m { --card: 112px; } .size-l { --card: 150px; }
+  .size-m { --card: 104px; } .size-l { --card: 150px; }
   h1 { font-size: 1.35rem; }
   .class-switch { max-width: 110px; }
 }
@@ -306,3 +298,102 @@ dialog.full .sheet { height: 100%; max-height: none; border-radius: 0; display: 
   @page { size: A4; margin: 0; }
 }
 .sheet:focus { outline: none; }
+
+
+/* ================= 可愛淺色風格（覆蓋上面的基本樣式） ================= */
+body { background-color: var(--bg); background-image: radial-gradient(#ffd6e2 1.3px, transparent 1.6px); background-size: 24px 24px; }
+h1, h2, h3, .brand, .class-card .name, .poster .title, .podium .pn { font-family: var(--font-display); }
+a { color: var(--blue); }
+.topbar { background: rgba(255, 255, 255, .92); border-bottom: 2px dashed var(--line); backdrop-filter: blur(6px); }
+.brand-mark { width: 30px; height: 36px; border-radius: 50% 50% 46% 46% / 58% 58% 42% 42%; background: linear-gradient(160deg, #ffd1dc, #ffb3c7 60%, #ffc9a8); color: #fff; box-shadow: inset 0 -3px 0 rgba(242, 122, 155, .35); }
+.brand-mark svg { width: 16px; height: 16px; filter: drop-shadow(0 1px 0 rgba(90, 42, 74, .35)); }
+.tabs { gap: 6px; padding: 4px 12px 10px; }
+.tab { border: none; border-radius: 999px; padding: 6px 14px; color: var(--muted); }
+.tab:hover { background: var(--surface-2); }
+.tab[aria-current="page"] { background: var(--accent-soft); color: var(--accent-ink); }
+.demo-banner { background: var(--lav-soft); color: var(--ink); }
+
+.btn { border: 2px solid var(--line); border-radius: 999px; font-weight: 700; transition: transform .12s, background .12s; }
+.btn:hover { background: var(--surface-2); transform: translateY(-1px); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); box-shadow: 0 3px 0 #f5a0b7; }
+.btn.blue { background: var(--sky); border-color: var(--sky); color: #24496f; box-shadow: 0 3px 0 #a7d0f5; }
+.btn.danger { color: var(--bad); }
+.btn[aria-pressed="true"] { background: var(--lav-soft); border-color: var(--lav); color: #5b47a0; }
+.btn.ghost { border-color: transparent; }
+.input, select.input, textarea.input { border: 2px solid var(--line); border-radius: 14px; }
+.input:focus { outline: none; border-color: var(--accent-strong); }
+:focus-visible { outline: 3px solid var(--lav); }
+.panel { border: 2px solid var(--line); border-radius: 24px; box-shadow: var(--shadow); }
+.chip { border: none; background: var(--surface-2); }
+.chip.good { background: var(--good-soft); color: var(--good); }
+.chip.bad { background: var(--bad-soft); color: var(--bad); }
+.chip.gold { background: var(--gold-soft); color: #8a6200; }
+.chip.blue { background: var(--blue-soft); color: var(--blue); }
+th { color: var(--muted); }
+th, td { border-bottom: 1px dashed var(--line); }
+
+.class-card { border: 2px solid var(--line); border-radius: 28px; box-shadow: var(--shadow); }
+.class-card .name { color: var(--accent-strong); }
+
+.search input { border: 2px solid var(--line); border-radius: 999px; background: #fff; }
+.search input:focus { border-color: var(--accent-strong); }
+.group-chip { border-radius: 999px; border-width: 2px; background: #fff; }
+.group-chip .plus { color: var(--ink); border-radius: 999px; }
+.stu { border: 2px solid #fff; border-radius: 26px; box-shadow: var(--shadow); }
+.stu:hover { animation: hop .45s; }
+@keyframes hop { 40% { transform: translateY(-5px) rotate(-1deg); } 70% { transform: translateY(1px); } }
+.stu .sc { background: var(--gold-soft); color: #7a5600; border-radius: 999px; }
+.stu .sc.neg { background: var(--bad-soft); color: var(--bad); }
+.stu .no { color: var(--muted); }
+.stu.sel { border-color: var(--accent-strong); background: var(--accent-soft); }
+.stu.sel::after { background: var(--accent-strong); color: #fff; }
+.stu .gbar { height: 5px; border-radius: 5px 5px 0 0; }
+.selbar { background: #fff; color: var(--ink); border: 2px solid var(--accent); border-radius: 999px; }
+
+dialog::backdrop { background: rgba(255, 214, 228, .55); backdrop-filter: blur(3px); }
+.sheet { border-radius: 28px; border: 2px solid var(--line); }
+.tag-btn { border-radius: 20px; border: 2px solid transparent; }
+.tag-btn.pos { background: var(--good-soft); }
+.tag-btn.pos:hover { border-color: var(--mint); }
+.tag-btn.neg { background: var(--bad-soft); }
+.quick .btn { border-radius: 18px; }
+
+.celebrate { background: rgba(255, 228, 238, .62); backdrop-filter: blur(2px); }
+.cele-card { border-radius: 34px; border: 3px solid var(--accent-soft); background: radial-gradient(circle at 50% 30%, var(--gold-soft), #fff 62%); box-shadow: 0 18px 50px rgba(240, 130, 165, .3); }
+.cele-card .delta { color: var(--good); }
+.levelup, .cele-multi .m .lv { background: var(--gold); color: #5c3b00; }
+
+.toast { background: #fff; color: var(--ink); border: 2px solid var(--accent); border-radius: 999px; padding: 8px 10px 8px 18px; }
+.toast.err { background: var(--bad-soft); color: #9c2f48; border-color: #f7b5c4; }
+.timer-face { color: var(--accent-strong); }
+.timer-face.done { color: var(--bad); }
+.timer-mini { border-color: var(--accent); color: var(--accent-strong); border-radius: 999px; }
+dialog.full .sheet { background: var(--bg); background-image: radial-gradient(#ffd6e2 1.3px, transparent 1.6px); background-size: 24px 24px; }
+
+.dex-row { border: 2px solid var(--line); border-radius: 22px; }
+.species-pick button { border-radius: 20px; }
+.species-pick button[aria-pressed="true"] { border-color: var(--accent-strong); background: var(--accent-soft); }
+.pet-item { border: 2px solid var(--line); border-radius: 22px; }
+.pet-card { border: 2px solid var(--line); border-radius: 30px; background: radial-gradient(circle at 50% 32%, var(--gold-soft), #fff 68%); box-shadow: var(--shadow); }
+.status-row { border: 2px solid var(--line); border-radius: 18px; }
+.seg { border: 2px solid var(--line); border-radius: 999px; }
+.seg button { background: #fff; }
+.seg button[aria-pressed="true"] { background: var(--lav-soft); color: #5b47a0; }
+.seg button[aria-pressed="true"][data-v="submitted"] { background: var(--good-soft); color: var(--good); }
+.seg button[aria-pressed="true"][data-v="late"] { background: var(--gold-soft); color: #8a6200; }
+.seg button[aria-pressed="true"][data-v="missing"] { background: var(--bad-soft); color: var(--bad); }
+.seg button[aria-pressed="true"][data-v="excused"] { background: var(--blue-soft); color: var(--blue); }
+.hw-card { border: 2px solid var(--line); border-radius: 22px; }
+.drop { border-radius: 22px; background: #fff; }
+.auth-card { border: 2px solid var(--line); border-radius: 32px; }
+
+/* 常用功課範本 */
+.tpl-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.tpl { display: inline-flex; align-items: center; border: 2px solid var(--lav); background: var(--lav-soft); color: #5b47a0; border-radius: 999px; font-weight: 700; overflow: hidden; }
+.tpl button { border: none; background: none; color: inherit; cursor: pointer; font: inherit; }
+.tpl .use { padding: 5px 4px 5px 14px; }
+.tpl .use small { font-weight: 600; opacity: .7; margin-left: 4px; }
+.tpl .del { padding: 5px 10px 5px 6px; opacity: .55; }
+.tpl .del:hover { opacity: 1; color: var(--bad); }
+.check { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--muted); }
+.check input { width: 18px; height: 18px; accent-color: var(--accent-strong); }

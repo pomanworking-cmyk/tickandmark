@@ -37,7 +37,7 @@
  [
   "4A 平均派蛋（八款中每款 1–2 隻）",
   true,
-  "['earth_bear', 'earth_bear', 'fire_fox', 'metal_bird', 'metal_cat', 'metal_cat', 'water_koi', 'water_otter', 'water_otter', 'wood_deer', 'wood_deer', 'wood_rabbit']"
+  "['earth_bear', 'earth_bear', 'fire_fox', 'metal_bird', 'metal_bird', 'metal_cat', 'metal_cat', 'water_koi', 'water_otter', 'water_otter', 'wood_deer', 'wood_rabbit']"
  ],
  [
   "4B 第一位資料是土熊蛋",
@@ -62,7 +62,7 @@
  [
   "多人加分彈窗：每位學生顯示自己的寵物",
   true,
-  "[{\"s\": \"15\", \"sp\": \"metal_cat\", \"st\": \"egg\"}, {\"s\": \"16\", \"sp\": \"water_koi\", \"st\": \"egg\"}, {\"s\": \"17\", \"sp\": \"fire_fox\", \"st\": \"egg\"}]"
+  "[{\"s\": \"15\", \"sp\": \"water_otter\", \"st\": \"egg\"}, {\"s\": \"16\", \"sp\": \"water_koi\", \"st\": \"egg\"}, {\"s\": \"17\", \"sp\": \"metal_cat\", \"st\": \"egg\"}]"
  ],
  [
   "多人加分 XP 各 +2",
@@ -122,7 +122,7 @@
  [
   "4A 馮凱琳 成長路線只顯示自己的品種",
   true,
-  "{'wood_deer'}"
+  "{'water_otter'}"
  ],
  [
   "4B 課室模式：10 個頭像與資料庫一致",
@@ -147,7 +147,7 @@
  [
   "4B 馬詩韻 成長路線只顯示自己的品種",
   true,
-  "{'wood_deer'}"
+  "{'wood_rabbit'}"
  ],
  [
   "4B 學生資料頁 許俊傑：1 個頭像與資料庫一致",
@@ -195,9 +195,24 @@
   "40/40"
  ],
  [
+  "按常用功課自動填好名稱及科目",
+  true,
+  ""
+ ],
+ [
+  "勾選後儲存為常用功課",
+  true,
+  "['中文作文', '周記', '常識工作紙', '數學工作紙', '英文默書']"
+ ],
+ [
+  "刪除常用功課",
+  true,
+  ""
+ ],
+ [
   "功課提交紀錄",
   true,
-  "{'id': 1, 'teacher_id': 1, 'class_id': 1, 'title': '中文作文', 'subject': '中文', 'due_date': '', 'created_at': '2026-10-07T10:45:19.177Z', 'submitted': 11, 'late': 0, 'missing': 1, 'excused': 0}"
+  "{'id': 1, 'teacher_id': 1, 'class_id': 1, 'title': '周記', 'subject': '中文', 'due_date': '2026-10-15', 'created_at': '2026-10-07T11:49:56.920Z', 'submitted': 11, 'late': 0, 'missing': 1, 'excused': 0}"
  ],
  [
   "考試成績平均",
@@ -215,9 +230,19 @@
   "390"
  ],
  [
+  "mobile（系統深色模式）頁面仍是淺色",
+  true,
+  "rgb(255, 247, 249)"
+ ],
+ [
   "tablet 無橫向捲動",
   true,
   "820"
+ ],
+ [
+  "tablet（系統深色模式）頁面仍是淺色",
+  true,
+  "rgb(255, 247, 249)"
  ],
  [
   "其他老師不能讀取本班（404）",

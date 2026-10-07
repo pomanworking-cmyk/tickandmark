@@ -18,6 +18,7 @@ erDiagram
   student_pets ||--o{ pet_xp_ledger : gains
   classes ||--o{ homework : has
   homework ||--o{ homework_submissions : has
+  teachers ||--o{ homework_templates : saves
   classes ||--o{ exams : has
   exams ||--o{ exam_scores : has
 ```
@@ -36,6 +37,7 @@ erDiagram
 | `student_pets` | **StudentPet，寵物唯一資料來源** | `student_record_id` UNIQUE → `students.id`；`species_key`、`stage` 有 CHECK；`xp ≥ 0`；`baseline_event_id`；`nickname`；`accessories` JSON |
 | `pet_xp_ledger` | XP 入帳 | `score_event_id` 為主鍵（同一筆加分只可入帳一次）；`stage_before`／`stage_after`；`reversed_at`（撤銷） |
 | `homework` / `homework_submissions` | 功課及提交 | 狀態：`submitted` 已交、`late` 遲交、`missing` 欠交、`excused` 豁免 |
+| `homework_templates` | 常用功課範本（老師本人，所有班別共用） | `UNIQUE(teacher_id, title, subject)`；新老師預設 4 個 |
 | `exams` / `exam_scores` | 考試成績 | `full_mark`；分數範圍 0 至滿分 |
 
 ## 不變條件（`GET /api/audit` 逐項檢查）

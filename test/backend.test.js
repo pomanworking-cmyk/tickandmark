@@ -164,6 +164,17 @@ async function scenario(c) {
     const exl = await c.req('GET', `/classes/${classes['4A'].id}/exams`);
     assert.equal(exl[0].avg, 80.25);
 
+    // 常用功課範本：預設 4 個、新增、重複略過、刪除
+    assert.equal(boot.homework_templates.length, 4, '新老師有 4 個預設常用功課');
+    let tpl = await c.req('POST', '/homework-templates', { title: '英文閱讀報告', subject: '英文' });
+    assert.equal(tpl.length, 5);
+    tpl = await c.req('POST', '/homework-templates', { title: '英文閱讀報告', subject: '英文' });
+    assert.equal(tpl.length, 5, '重複範本不會再加');
+    tpl = await c.req('DELETE', `/homework-templates/${tpl.find(t => t.title === '中文作文').id}`);
+    assert.equal(tpl.length, 4); assert.ok(!tpl.some(t => t.title === '中文作文'));
+    await assert.rejects(c.req('POST', '/homework-templates', { title: '  ', subject: '中文' }), /功課名稱/);
+    L('templates', tpl);
+
     // 跨班：不可把 4B 學生放進 4A 的加分
     await assert.rejects(c.req('POST', '/points', { class_id: classes['4A'].id, student_ids: [b4[0].id], delta: 1, client_batch_id: 'x-1' }), /不屬於此班/);
 
@@ -173,6 +184,9 @@ async function scenario(c) {
     await assert.rejects(c.req('GET', `/students/${pre.id}`), /找不到資料/);
     await assert.rejects(c.req('POST', '/points', { class_id: classes['4A'].id, student_ids: [pre.id], delta: 1, client_batch_id: 'evil' }), /找不到資料/);
     assert.equal((await c.req('GET', '/classes')).length, 0);
+    const bTpl = await c.req('GET', '/homework-templates');
+    assert.ok(!bTpl.some(t => t.title === '英文閱讀報告'), '其他老師看不到我的常用功課');
+    await assert.rejects(c.req('DELETE', `/homework-templates/${tpl[0].id}`), /找不到資料/);
     c.as('A');
 
     const audit = await c.req('GET', '/audit');

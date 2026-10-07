@@ -210,7 +210,19 @@ try:
         check('圖鑑 40 張圖全部成功載入', len(dex) == 40 and all(d['ok'] for d in dex) and len({d['src'] for d in dex}) == 40, f"{sum(d['ok'] for d in dex)}/{len(dex)}")
 
         # 功課及考試
-        page.goto(BASE + f"#/c/{ids['4A']}/homework"); page.fill('#hw-title', '中文作文'); page.fill('#hw-subj', '中文'); page.click('button:has-text("新增功課")')
+        page.goto(BASE + f"#/c/{ids['4A']}/homework"); page.wait_for_selector('#tpl-row .tpl')
+        page.click('#tpl-row .use:has-text("數學工作紙")')
+        check('按常用功課自動填好名稱及科目', page.input_value('#hw-title') == '數學工作紙' and page.input_value('#hw-subj') == '數學' and page.input_value('#hw-due') != '')
+        page.screenshot(path=f'{OUT}/homework-templates.png', full_page=True)
+        page.fill('#hw-title', '中文作文'); page.fill('#hw-subj', '中文'); page.fill('#hw-due', '2026-10-15')
+        page.fill('#hw-title', '周記'); page.check('#hw-save'); page.click('button:has-text("新增功課")')
+        page.wait_for_selector('.status-grid')
+        tpls = api(page, 'GET', '/homework-templates')
+        check('勾選後儲存為常用功課', any(t['title'] == '周記' and t['subject'] == '中文' for t in tpls), str([t['title'] for t in tpls]))
+        page.goto(BASE + f"#/c/{ids['4A']}/homework"); page.wait_for_selector('#tpl-row .use:has-text("周記")')
+        page.click('#tpl-row .tpl:has-text("周記") .del'); page.click('dialog button:has-text("刪除")'); page.wait_for_timeout(400)
+        check('刪除常用功課', page.locator('#tpl-row .use:has-text("周記")').count() == 0 and not any(t['title'] == '周記' for t in api(page, 'GET', '/homework-templates')))
+        page.click('.hw-card >> nth=0'); page.wait_for_selector('.status-grid')
         page.wait_for_selector('.status-grid'); page.locator('[data-v=missing]').nth(1).click(); page.wait_for_timeout(200)
         page.click('text=未記錄的全部設為已交'); page.wait_for_timeout(300)
         hw = api(page, 'GET', f"/classes/{ids['4A']}/homework")[0]
@@ -231,9 +243,11 @@ try:
 
         # 手機及平板
         for name, vp in [('mobile', {'width': 390, 'height': 844}), ('tablet', {'width': 820, 'height': 1180})]:
-            m = br.new_context(viewport=vp, storage_state=ctx.storage_state()).new_page()
+            m = br.new_context(viewport=vp, storage_state=ctx.storage_state(), color_scheme='dark').new_page()  # 系統深色模式下仍應是淺色
             m.goto(BASE + f"#/c/{ids['4B']}/room"); m.wait_for_selector('.stu')
             sw = m.evaluate('document.documentElement.scrollWidth'); check(f'{name} 無橫向捲動', sw <= vp['width'], str(sw))
+            bg = m.evaluate("getComputedStyle(document.body).backgroundColor")
+            check(f'{name}（系統深色模式）頁面仍是淺色', bg in ('rgb(255, 247, 249)',), bg)
             m.screenshot(path=f'{OUT}/room-{name}.png')
             m.goto(BASE + f"#/s/{bear['id']}"); m.wait_for_selector('.pet-card'); m.screenshot(path=f'{OUT}/student-{name}.png', full_page=True)
 

@@ -13,20 +13,30 @@ const strip = (src) => src
 let js = order.map(f => `// ---- ${f} ----\n${strip(fs.readFileSync(path.join(ROOT, 'public', f), 'utf8'))}`).join('\n');
 if (/^\s*(import|export)\s/m.test(js)) throw new Error('仍有未處理的 import/export');
 
+// 40 張寵物圖內嵌為 data URI，預覽頁不需讀取外部圖片檔
+const images = {};
+const petDir = path.join(ROOT, 'public/assets/pets');
+for (const sp of fs.readdirSync(petDir).sort()) for (const f of fs.readdirSync(path.join(petDir, sp)).sort()) {
+  images[`assets/pets/${sp}/${f}`] = 'data:image/webp;base64,' + fs.readFileSync(path.join(petDir, sp, f)).toString('base64');
+}
+if (Object.keys(images).length !== 40) throw new Error('寵物圖數目不是 40');
 const css = fs.readFileSync(path.join(ROOT, 'public/css/app.css'), 'utf8');
 const html = `<title>Tick and Mark</title>
 <meta name="robots" content="noindex">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&family=Chiron+Hei+HK:wght@400;600;700;800;900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Huninn&display=swap">
+<meta name="color-scheme" content="light">
 <style>
 ${css}
 </style>
 <div id="app"><div class="empty">載入中…</div></div>
-<script>window.TM_DEMO = true;</script>
+<script>window.TM_DEMO = true;
+window.TM_PET_IMAGES = ${JSON.stringify(images)};</script>
 <script type="module">
 ${js}
 </script>
 `;
 fs.mkdirSync(out, { recursive: true });
 fs.writeFileSync(path.join(out, 'index.html'), html);
-fs.cpSync(path.join(ROOT, 'public/assets'), path.join(out, 'assets'), { recursive: true });
-console.log(`已輸出 ${path.join(out, 'index.html')}（${(html.length / 1024).toFixed(0)} KB）及 40 張寵物圖`);
+fs.rmSync(path.join(out, 'assets'), { recursive: true, force: true });
+console.log(`已輸出 ${path.join(out, 'index.html')}（${(html.length / 1024).toFixed(0)} KB），已內嵌 40 張寵物圖`);

@@ -14,6 +14,8 @@ const DEFAULT_TAGS = [
   ['收拾整齊', 1, '🧹'], ['欠交功課', -1, '📕'], ['不守秩序', -1, '🔇'],
 ];
 
+const DEFAULT_HW_TEMPLATES = [['中文作文', '中文'], ['英文默書', '英文'], ['數學工作紙', '數學'], ['常識工作紙', '常識']];
+
 const str = (v, max = 80) => String(v ?? '').trim().slice(0, max);
 const int = (v) => { const n = Number(v); return Number.isInteger(n) ? n : NaN; };
 const now = () => new Date().toISOString();
@@ -23,6 +25,8 @@ export function seedTeacher(db, teacherId) {
     .run(teacherId, JSON.stringify(DEFAULT_THRESHOLDS));
   const ins = db.prepare('INSERT INTO behavior_tags (teacher_id, label, points, icon, sort) VALUES (?,?,?,?,?)');
   DEFAULT_TAGS.forEach(([l, p, i], n) => ins.run(teacherId, l, p, i, n));
+  const tpl = db.prepare('INSERT OR IGNORE INTO homework_templates (teacher_id, title, subject) VALUES (?,?,?)');
+  DEFAULT_HW_TEMPLATES.forEach(([t, sj]) => tpl.run(teacherId, t, sj));
 }
 
 export function createApi(db) {
@@ -66,7 +70,20 @@ export function createApi(db) {
     timer_presets: JSON.parse(db.prepare('SELECT timer_presets FROM settings WHERE teacher_id = ?').get(tid)?.timer_presets || '[60,180,300,600]'),
     tags: db.prepare('SELECT * FROM behavior_tags WHERE teacher_id = ? ORDER BY sort, id').all(tid),
     classes: listClasses(tid),
+    homework_templates: listTemplates(tid),
   }));
+  const listTemplates = (tid) => db.prepare('SELECT id, title, subject FROM homework_templates WHERE teacher_id = ? ORDER BY subject, title, id').all(tid);
+
+  // ---------- 常用功課範本 ----------
+  on('GET', '/homework-templates', ({ tid }) => listTemplates(tid));
+  on('POST', '/homework-templates', ({ tid, body }) => {
+    const title = str(body.title, 60); if (!title) throw bad('請輸入功課名稱');
+    db.prepare('INSERT OR IGNORE INTO homework_templates (teacher_id, title, subject) VALUES (?,?,?)').run(tid, title, str(body.subject, 20));
+    return listTemplates(tid);
+  });
+  on('DELETE', '/homework-templates/:id', ({ tid, p }) => {
+    own('homework_templates', p.id, tid); db.prepare('DELETE FROM homework_templates WHERE id = ?').run(p.id); return listTemplates(tid);
+  });
 
   function listClasses(tid) {
     return db.prepare(`SELECT c.*,
@@ -163,7 +180,7 @@ export function createApi(db) {
   on('POST', '/classes/:id/groups', ({ tid, p, body }) => {
     const c = own('classes', p.id, tid);
     const name = str(body.name, 20); if (!name) throw bad('請輸入小組名稱');
-    const r = db.prepare('INSERT INTO groups (teacher_id, class_id, name, color) VALUES (?,?,?,?)').run(tid, c.id, name, str(body.color, 9) || '#5b8def');
+    const r = db.prepare('INSERT INTO groups (teacher_id, class_id, name, color) VALUES (?,?,?,?)').run(tid, c.id, name, str(body.color, 9) || '#8cc4f5');
     return own('groups', Number(r.lastInsertRowid), tid);
   });
   on('PATCH', '/groups/:id', ({ tid, p, body }) => {

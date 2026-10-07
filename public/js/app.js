@@ -378,7 +378,7 @@ function renderStudents() {
           <span class="who">${esc(g.name)} <span class="muted small">${list.filter(s => s.group_id === g.id).length} 人</span></span>
           <button class="btn sm" data-act="renamegroup" data-id="${g.id}">改名</button><button class="btn sm danger" data-act="delgroup" data-id="${g.id}">刪除</button></div>`).join('') || '<p class="muted">未有小組。建立後在下表為學生選擇小組。</p>'}</div>
         <form class="row" data-form="newgroup" style="margin-top:12px"><label class="field"><span>新小組名稱</span><input class="input" id="ng-name" name="name" maxlength="20" required placeholder="例如：藍鯨隊"></label>
-          <input type="color" name="color" value="#2f6fd1" aria-label="顏色" style="width:44px;height:40px;border:none;background:none"><button class="btn blue">新增</button></form>
+          <input type="color" name="color" value="#8cc4f5" aria-label="顏色" style="width:44px;height:40px;border:none;background:none"><button class="btn blue">新增</button></form>
       </section>
     </div>
     <section class="panel" style="margin-top:14px">
@@ -451,6 +451,11 @@ function editDialog(label, value, save) {
 }
 
 // ---------- 功課 ----------
+function tplChips() {
+  const list = state.boot.homework_templates || [];
+  return list.length ? list.map(t => `<span class="tpl"><button type="button" class="use" data-act="usetpl" data-id="${t.id}">${esc(t.title)}${t.subject ? `<small>${esc(t.subject)}</small>` : ''}</button><button type="button" class="del" data-act="deltpl" data-id="${t.id}" aria-label="刪除常用功課 ${esc(t.title)}">✕</button></span>`).join('')
+    : '<span class="muted small">未有常用功課。新增功課時勾選「儲存為常用功課」即可加入。</span>';
+}
 const HW_STATUS = [['submitted', '已交'], ['late', '遲交'], ['missing', '欠交'], ['excused', '豁免']];
 async function renderHomework(hid) {
   if (hid) return renderHomeworkDetail(hid);
@@ -458,9 +463,16 @@ async function renderHomework(hid) {
   const n = students().length;
   shell('homework', `
     <div class="page-head"><h1>功課及提交紀錄</h1></div>
-    <form class="panel row" data-form="newhw"><label class="field"><span>功課名稱</span><input class="input" id="hw-title" name="title" required maxlength="60" placeholder="例如：中文作文"></label>
-      <label class="field" style="flex:0 1 140px"><span>科目</span><input class="input" id="hw-subj" name="subject" maxlength="20" list="subjects"></label>
-      <label class="field" style="flex:0 1 170px"><span>限期</span><input class="input" id="hw-due" name="due_date" type="date"></label><button class="btn blue">新增功課</button></form>
+    <section class="panel">
+      <h2>新增功課</h2>
+      <div class="section-label">常用功課（按一下即填好名稱及科目）</div>
+      <div class="tpl-row" id="tpl-row">${tplChips()}</div>
+      <form class="row" data-form="newhw"><label class="field"><span>功課名稱</span><input class="input" id="hw-title" name="title" required maxlength="60" placeholder="例如：中文作文"></label>
+        <label class="field" style="flex:0 1 140px"><span>科目</span><input class="input" id="hw-subj" name="subject" maxlength="20" list="subjects"></label>
+        <label class="field" style="flex:0 1 170px"><span>限期</span><input class="input" id="hw-due" name="due_date" type="date"></label>
+        <label class="check" style="flex-basis:100%"><input type="checkbox" id="hw-save" name="save_template"> 儲存為常用功課，下次一按就用得</label>
+        <button class="btn blue">新增功課</button></form>
+    </section>
     <datalist id="subjects"><option>中文</option><option>英文</option><option>數學</option><option>常識</option><option>人文</option><option>科學</option><option>普通話</option><option>視藝</option><option>音樂</option></datalist>
     <div class="stack" style="margin-top:14px;gap:8px">${list.map(h => {
       const total = Math.max(n, 1); const w = (x) => (x / total * 100).toFixed(1) + '%';
@@ -468,7 +480,24 @@ async function renderHomework(hid) {
         <span class="meter" aria-hidden="true"><i style="width:${w(h.submitted)};background:var(--good)"></i><i style="width:${w(h.late)};background:var(--gold)"></i><i style="width:${w(h.missing)};background:var(--bad)"></i><i style="width:${w(h.excused)};background:var(--blue)"></i></span>
         <span class="small"><span class="chip good">已交 ${h.submitted}</span> <span class="chip bad">欠交 ${h.missing}</span> <span class="chip">未記錄 ${Math.max(0, n - h.submitted - h.late - h.missing - h.excused)}</span></span></a>`;
     }).join('') || '<div class="empty"><strong>未有功課</strong>新增後可逐一記錄提交情況。</div>'}</div>`);
-  ACT['submit:newhw'] = async (_f, fd) => { const h = await POST(`/classes/${state.classId}/homework`, Object.fromEntries(fd)); go(`#/c/${state.classId}/homework/${h.id}`); };
+  ACT['submit:newhw'] = async (_f, fd) => {
+    const body = Object.fromEntries(fd);
+    if (body.save_template) state.boot.homework_templates = await POST('/homework-templates', { title: body.title, subject: body.subject });
+    const h = await POST(`/classes/${state.classId}/homework`, { title: body.title, subject: body.subject, due_date: body.due_date });
+    go(`#/c/${state.classId}/homework/${h.id}`);
+  };
+  ACT.usetpl = (el) => {
+    const t = state.boot.homework_templates.find(x => x.id === Number(el.dataset.id)); if (!t) return;
+    $('#hw-title').value = t.title; $('#hw-subj').value = t.subject; $('#hw-save').checked = false;
+    const due = $('#hw-due'); if (!due.value) { const d = new Date(); d.setDate(d.getDate() + 1); due.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+    due.focus();
+  };
+  ACT.deltpl = async (el) => {
+    const t = state.boot.homework_templates.find(x => x.id === Number(el.dataset.id)); if (!t) return;
+    if (!(await confirmBox(`刪除常用功課「${t.title}」？已建立的功課不受影響。`, { ok: '刪除', danger: true }))) return;
+    state.boot.homework_templates = await DEL(`/homework-templates/${t.id}`);
+    $('#tpl-row').innerHTML = tplChips();
+  };
 }
 async function renderHomeworkDetail(hid) {
   const t = navSeq; const { homework: h, entries } = await GET(`/homework/${hid}/submissions`); if (t !== navSeq) return;

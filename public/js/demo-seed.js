@@ -12,7 +12,7 @@ export async function seedDemo(be) {
   for (const [cn, names] of Object.entries(lists)) {
     const c = await r('POST', '/classes', { name: cn, school_year: '2026-27' });
     const { created } = await r('POST', `/classes/${c.id}/students`, { students: names.map((name, i) => ({ number: i + 1, name, score: (i * 7) % 13 })) });
-    const groups = [['藍鯨隊', '#2f6fd1'], ['珊瑚隊', '#ff6b4a'], ['竹林隊', '#1f9d63'], ['向日葵隊', '#e3a008']];
+    const groups = [['藍鯨隊', '#8cc4f5'], ['珊瑚隊', '#ffa3ba'], ['竹林隊', '#8ad9b4'], ['向日葵隊', '#ffd166']];
     for (let g = 0; g < groups.length; g++) {
       const grp = await r('POST', `/classes/${c.id}/groups`, { name: groups[g][0], color: groups[g][1] });
       await r('PUT', `/groups/${grp.id}/members`, { student_ids: created.filter((_, i) => i % 4 === g).map(s => s.id) });

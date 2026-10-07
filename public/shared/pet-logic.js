@@ -79,7 +79,9 @@ export function petImageUrl(pet, base = '') {
   if (!pet) return null;
   if (!speciesByKey[pet.species_key]) throw new Error(`未知品種：${pet.species_key}`);
   stageIndex(pet.stage);
-  return `${base}assets/pets/${pet.species_key}/${pet.stage}.webp`;
+  const path = `assets/pets/${pet.species_key}/${pet.stage}.webp`;
+  const embedded = globalThis.TM_PET_IMAGES?.[path]; // 預覽版：圖片已內嵌在頁面
+  return embedded || `${base}${path}`;
 }
 
 export function petLabel(pet) {

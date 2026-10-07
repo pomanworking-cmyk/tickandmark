@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS groups (
   teacher_id  INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
   class_id    INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
   name        TEXT NOT NULL,
-  color       TEXT NOT NULL DEFAULT '#5b8def'
+  color       TEXT NOT NULL DEFAULT '#8cc4f5'
 );
 
 -- Student
@@ -147,4 +147,14 @@ CREATE TABLE IF NOT EXISTS exam_scores (
   student_id  INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
   score       REAL,
   PRIMARY KEY (exam_id, student_id)
+);
+
+-- 常用功課範本：老師儲存的功課名稱及科目，所有班別共用
+CREATE TABLE IF NOT EXISTS homework_templates (
+  id          INTEGER PRIMARY KEY,
+  teacher_id  INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+  title       TEXT NOT NULL,
+  subject     TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE (teacher_id, title, subject)
 );
