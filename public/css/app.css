@@ -434,6 +434,7 @@ dialog.full .sheet { background: var(--bg); background-image: radial-gradient(#f
 
 /* 手機：座位表縮細，全班一眼看得到 */
 @media (max-width: 600px) {
+  .seat-scroll .ribbon { top: 52%; }
   .seat-board { width: 100%; }
   .seat-scroll .seats { gap: 6px; grid-template-columns: repeat(var(--cols), minmax(44px, 1fr)); justify-content: start; }
   .seat-scroll .stu { padding: 15px 2px 6px; border-radius: 16px; gap: 2px; }
@@ -446,3 +447,79 @@ dialog.full .sheet { background: var(--bg); background-image: radial-gradient(#f
 }
 /* 背景只輕輕染色，不模糊，方便老師看清下一位學生 */
 .celebrate { background: rgba(255, 228, 238, .28); backdrop-filter: none; }
+
+/* ===== 課堂工具 ===== */
+.tool-row { display: flex; gap: 8px; align-items: center; overflow-x: auto; padding: 2px 2px 8px; margin-bottom: 4px; }
+.tool { flex: none; border: 2px solid var(--line); background: #fff; border-radius: 16px; padding: 6px 12px; font: inherit; font-weight: 700; color: var(--ink); cursor: pointer; min-height: 40px; white-space: nowrap; box-shadow: 0 2px 0 #f8e1ea; }
+.tool:hover { background: var(--surface-2); transform: translateY(-1px); }
+.goal-pill { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 6px; border: 2px dashed var(--gold); background: var(--gold-soft); color: #7a5600; border-radius: 999px; padding: 5px 14px; font: inherit; font-weight: 800; cursor: pointer; white-space: nowrap; min-height: 40px; }
+.goal-pill.has { border-style: solid; }
+.goal-pill .gt { max-width: 10em; overflow: hidden; text-overflow: ellipsis; }
+.goal-pill .mini { width: 70px; height: 8px; background: #fff; border-radius: 99px; overflow: hidden; display: inline-block; }
+.goal-pill .mini i { display: block; height: 100%; background: var(--gold); border-radius: 99px; transition: width .8s; }
+.mode-tabs { display: inline-flex; gap: 4px; background: #fff; border: 2px solid var(--line); border-radius: 999px; padding: 4px; margin-bottom: 8px; max-width: 100%; overflow-x: auto; }
+.mode-tab { border: none; background: none; border-radius: 999px; padding: 6px 14px; font: inherit; font-weight: 800; color: var(--muted); cursor: pointer; white-space: nowrap; min-height: 36px; }
+.mode-tab[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); box-shadow: 0 2px 0 #f5a0b7; }
+
+/* 缺席 & 收功課標籤 */
+.stu.absent { opacity: .55; background: #f6f1f4; }
+.stu.absent .avatar { filter: grayscale(.9); }
+.ribbon { position: absolute; left: 50%; bottom: 6px; transform: translateX(-50%); font-size: .75rem; font-weight: 800; border-radius: 999px; padding: 1px 10px; white-space: nowrap; }
+.ribbon.absent { background: #e9e2ea; color: #6f6577; }
+.ribbon.hw-submitted { background: var(--good-soft); color: var(--good); }
+.ribbon.hw-late { background: var(--gold-soft); color: #8a6200; }
+.ribbon.hw-missing { background: var(--bad-soft); color: var(--bad); }
+.ribbon.hw-excused { background: var(--blue-soft); color: var(--blue); }
+.qchip.hwc.hw-submitted[aria-pressed="true"] { background: var(--good-soft); border-color: var(--good); color: var(--good); box-shadow: none; }
+.qchip.hwc.hw-late[aria-pressed="true"] { background: var(--gold-soft); border-color: var(--gold); color: #8a6200; box-shadow: none; }
+.qchip.hwc.hw-missing[aria-pressed="true"] { background: var(--bad-soft); border-color: var(--bad); color: var(--bad); box-shadow: none; }
+.qchip.hwc.hw-excused[aria-pressed="true"] { background: var(--blue-soft); border-color: var(--blue); color: var(--blue); box-shadow: none; }
+
+/* 抽人 */
+.stu.spot { border-color: var(--gold); background: var(--gold-soft); transform: scale(1.07); box-shadow: 0 0 0 5px rgba(255, 201, 77, .45), var(--shadow); z-index: 2; transition: transform .08s; }
+.pick-result { text-align: center; display: grid; justify-items: center; gap: 8px; }
+.pick-result .avatar img { animation: bob 1.6s ease-in-out infinite; }
+
+/* 全班目標能量瓶 */
+.jar-wrap { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.jar { position: relative; width: 150px; height: 190px; border: 5px solid var(--line); border-top-width: 14px; border-radius: 28px 28px 48px 48px; background: #fff; overflow: hidden; flex: none; }
+.jar .fill { position: absolute; left: 0; right: 0; bottom: 0; background: linear-gradient(180deg, #ffe08a, var(--gold)); transition: height 1s cubic-bezier(.2,.8,.2,1); }
+.jar .fill::before { content: ""; position: absolute; left: -10%; right: -10%; top: -8px; height: 16px; background: radial-gradient(circle at 10px 8px, #ffe08a 8px, transparent 9px) 0 0 / 20px 16px repeat-x; animation: wave 2.4s linear infinite; }
+@keyframes wave { to { transform: translateX(20px); } }
+.jar-num { position: absolute; inset: 0; display: grid; place-items: center; font-size: 2rem; font-weight: 800; color: #7a5600; }
+.jar-title { font-family: var(--font-display); font-size: 1.5rem; font-weight: 800; }
+.goal-win .cele-card { width: min(520px, 100%); }
+
+/* 兌換 */
+.rw-students { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin: 12px 0; max-height: 46vh; overflow: auto; }
+.rw-stu { border: 2px solid var(--line); background: #fff; border-radius: 18px; padding: 6px; display: grid; justify-items: center; gap: 2px; cursor: pointer; font: inherit; color: var(--ink); }
+.rw-stu .num { font-size: .8rem; color: var(--good); font-weight: 700; }
+.rw-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.rw-item { border: 2px solid var(--line); background: #fff; border-radius: 20px; padding: 12px; display: grid; justify-items: center; gap: 4px; cursor: pointer; font: inherit; color: var(--ink); }
+.rw-item .ic { font-size: 2rem; }
+.rw-item .num { color: #8a6200; font-weight: 800; }
+.rw-item:not(:disabled):hover { border-color: var(--accent-strong); background: var(--accent-soft); }
+.rw-item:disabled { opacity: .45; cursor: not-allowed; }
+
+/* 分組 */
+.rg-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: 10px; margin-top: 12px; max-height: 50vh; overflow: auto; }
+.rg-group { border: 2px solid var(--gc); border-radius: 20px; padding: 8px 10px; background: #fff; }
+.rg-name { font-weight: 800; display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.rg-name .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--gc); }
+.rg-members { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.rg-m { display: inline-flex; align-items: center; gap: 2px; font-size: .9rem; }
+
+/* 噪音計 */
+.noise { display: grid; gap: 18px; justify-items: center; width: min(720px, 100%); margin: 0 auto; }
+.noise-face { font-size: clamp(5rem, 22vw, 11rem); line-height: 1; transition: transform .2s; }
+.noise-msg { font-family: var(--font-display); font-size: clamp(1.3rem, 4vw, 2.4rem); font-weight: 800; text-align: center; }
+.noise-bar { position: relative; width: 100%; height: 34px; background: #fff; border: 3px solid var(--line); border-radius: 999px; overflow: hidden; }
+.noise-bar i { display: block; height: 100%; width: 0; background: var(--mint); border-radius: 999px; transition: background .3s; }
+.noise-th { position: absolute; top: -2px; bottom: -2px; width: 4px; background: var(--bad); border-radius: 4px; }
+.noise .field { width: 100%; }
+.noise input[type=range] { width: 100%; accent-color: var(--accent-strong); }
+.noise.loud .noise-face { animation: shake .4s infinite; }
+.noise.loud .noise-msg { color: var(--bad); }
+.ribbon { bottom: auto; top: calc(var(--card) * .52); box-shadow: 0 1px 0 rgba(0,0,0,.05); }
+.seat-scroll .ribbon { font-size: .68rem; padding: 0 6px; }
+.jar-wrap > div:last-child { flex: 1 1 220px; min-width: 0; }

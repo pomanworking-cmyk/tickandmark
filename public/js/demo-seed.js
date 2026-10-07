@@ -32,5 +32,14 @@ export async function seedDemo(be) {
     const ex = await r('POST', `/classes/${c.id}/exams`, { title: '第一次小測', subject: '數學', full_mark: 100, exam_date: '2026-10-05' });
     await r('PUT', `/exams/${ex.id}/scores`, { scores: created.map((s, i) => ({ student_id: s.id, score: 58 + ((i * 17) % 42) })) });
   }
+  // 第一班：全班目標、今日一位缺席、一次兌換
+  const first = (await r('GET', '/classes')).find(c => c.name === '3B');
+  const full = await r('GET', `/classes/${first.id}/full`);
+  await r('POST', `/classes/${first.id}/goal`, { title: '全班看電影', target: 150 });
+  await r('POST', '/points', { class_id: first.id, student_ids: full.students.slice(0, 8).map(s => s.id), delta: 4, reason: '全班安靜做練習', client_batch_id: bid() });
+  const d = new Date(); const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  await r('PUT', `/classes/${first.id}/attendance`, { date: today, absent: [full.students[12].id] });
+  const rewards = (await r('GET', '/rewards'));
+  await r('POST', '/redemptions', { student_id: full.students[7].id, reward_id: rewards[0].id });
   await r('POST', '/auth/logout'); // 預覽由登入頁開始
 }

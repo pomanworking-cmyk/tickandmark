@@ -5,12 +5,17 @@ import { SPECIES, STAGES, STAGE_LABELS, speciesByKey, petLabel, progressInfo } f
 import { readFileToStudents, textToStudents, ocrImage } from './importer.js';
 
 const app = document.getElementById('app');
-const state = { teacher: null, boot: null, cls: null, classId: null, importRows: [], hwCache: null };
+const state = { teacher: null, boot: null, cls: null, classId: null, importRows: [], hwCache: null, absent: new Set(), attDate: '', goal: null };
 const store = {
   get(k, d) { try { const v = localStorage.getItem('tm.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('tm.' + k, JSON.stringify(v)); } catch { /* 私密瀏覽 */ } },
 };
-const room = { q: '', sort: store.get('sort', 'seats'), size: store.get('size', 'm'), multi: false, sel: new Set(), quick: store.get('quick', 'menu'), edit: false, pick: null, justDragged: 0 };
+const room = {
+  q: '', sort: store.get('sort', 'seats'), size: store.get('size', 'm'), multi: false, sel: new Set(), quick: store.get('quick', 'menu'),
+  mode: 'points', pick: null, justDragged: 0, hwId: null, hwStatus: 'submitted', hwMap: new Map(), hwList: [], picked: new Map(), picking: false,
+  get edit() { return this.mode === 'seats'; }, set edit(v) { this.mode = v ? 'seats' : 'points'; },
+};
+const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 let ACT = {};
 const go = (h) => { if (location.hash === h) route(); else location.hash = h; };
 const thresholds = () => state.boot?.thresholds;
@@ -65,9 +70,10 @@ async function route() {
     if (!state.boot) state.boot = await GET('/bootstrap');
     if (parts[0] === 'c') {
       const id = Number(parts[1]);
-      if (state.classId !== id || !state.cls) { const full = await GET(`/classes/${id}/full`); if (my !== navSeq) return; state.cls = full; state.classId = id; room.sel.clear(); room.edit = false; room.pick = null; }
+      if (state.classId !== id || !state.cls) { const full = await GET(`/classes/${id}/full`); if (my !== navSeq) return; state.cls = full; state.classId = id; room.sel.clear(); room.mode = 'points'; room.pick = null; room.hwId = null; room.hwMap = new Map(); }
       const v = parts[2] || 'room';
       store.set('lastClass', id);
+      if (v === 'room') { await loadRoomExtras(); if (my !== navSeq) return; }
       const views = { room: renderRoom, students: renderStudents, homework: renderHomework, exams: renderExams, history: renderHistory, pets: renderPets, poster: renderPoster };
       return (views[v] || renderRoom)(parts[3] ? Number(parts[3]) : null);
     }
@@ -79,6 +85,12 @@ async function route() {
     fail(e);
   }
 }
+async function loadRoomExtras() {
+  const date = todayStr();
+  const [att, goal] = await Promise.all([GET(`/classes/${state.classId}/attendance?date=${date}`), GET(`/classes/${state.classId}/goal`)]);
+  state.absent = new Set(att.absent); state.attDate = date; state.goal = goal;
+}
+const present = () => students().filter(s => !state.absent.has(s.id));
 async function reloadClass() { state.cls = await GET(`/classes/${state.classId}/full`); }
 async function reloadBoot() { state.boot = await GET('/bootstrap'); }
 
@@ -153,12 +165,14 @@ async function givePoints(ids, { delta, tag, reason, quick = false }) {
   celebrate(res.results, { label, thresholds: thresholds(), quick });
   const names = res.results.length > 3 ? `${res.results.length} 位同學` : res.results.map(r => r.name).join('、');
   toast(`${names} ${signed(d)}（${label}）`, { action: () => undoBatch(res.batch_id), actionLabel: '撤銷' });
+  if (d > 0) refreshGoal().catch(() => {});
   return res;
 }
 async function undoBatch(id) {
   const r = await POST(`/batches/${id}/undo`);
   for (const x of r.results) { const s = students().find(s => s.id === x.student_id); if (s) { s.score = x.score; s.pet = x.pet; } }
   toast(`已撤銷：${r.label}`);
+  refreshGoal().catch(() => {});
   if (location.hash.includes('/room')) { drawRoomGrid(); drawGroupRow(); } else route();
 }
 
@@ -180,7 +194,7 @@ function pointSheet(ids) {
     <form class="row" data-custom><label class="field"><span>自訂原因</span><input class="input" id="pt-reason" name="reason" maxlength="60" placeholder="例如：朗讀出色"></label>
       <label class="field" style="flex:0 0 100px"><span>分數</span><input class="input num" id="pt-delta" name="delta" type="number" min="-100" max="100" value="1" required></label>
       <button class="btn blue">給分</button></form>
-    ${list.length === 1 ? `<div style="margin-top:12px;text-align:right"><a class="btn ghost sm" href="#/s/${list[0].id}">查看學生資料 →</a></div>` : ''}`);
+    ${list.length === 1 ? `<div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn ghost sm" data-redeem>🎁 兌換獎勵（可用 ${list[0].score - (list[0].spent || 0)} 分）</button><a class="btn ghost sm" href="#/s/${list[0].id}">查看學生資料 →</a></div>` : ''}`);
   const done = async (opts) => {
     $$('button', d).forEach(b => { b.disabled = true; });
     try { await givePoints(ids, opts); d.close(); room.sel.clear(); room.multi = false; if ($('#room-grid')) renderRoom(); }
@@ -189,6 +203,7 @@ function pointSheet(ids) {
   d.addEventListener('click', (e) => {
     const t = e.target.closest('[data-tag]'); if (t) return done({ tag: tags.find(x => x.id === Number(t.dataset.tag)) });
     const q = e.target.closest('[data-d]'); if (q) return done({ delta: Number(q.dataset.d) });
+    if (e.target.closest('[data-redeem]')) { d.close(); openRewards(ids[0]); }
   });
   d.querySelector('[data-custom]').addEventListener('submit', (e) => {
     e.preventDefault(); const fd = new FormData(e.target);
@@ -252,8 +267,10 @@ function seatEditBarHTML() {
 }
 function drawQuickBar() {
   const bar = $('#quick-bar'); if (!bar) return;
-  bar.className = 'quick-bar' + (room.edit ? ' editing' : '');
-  bar.innerHTML = room.edit ? seatEditBarHTML() : quickBarHTML();
+  bar.className = 'quick-bar' + (room.mode !== 'points' ? ' editing' : '');
+  bar.innerHTML = { points: quickBarHTML, seats: seatEditBarHTML, attend: attendBarHTML, hw: hwBarHTML }[room.mode]();
+  const sel = $('#hw-pick', bar);
+  if (sel) sel.onchange = () => { if (sel.value === 'new') { sel.value = room.hwId || ''; newHomeworkQuick(); } else selectHomework(Number(sel.value)).catch(fail); };
 }
 function drawGroupRow() {
   const box = $('#group-row'); if (!box) return;
@@ -269,12 +286,19 @@ function renderRoom() {
       <select class="input" id="room-sort" style="width:auto" aria-label="排列">
         <option value="seats">座位表</option><option value="number">按班號</option><option value="score">按分數</option><option value="name">按姓名</option></select>
       <div class="seg" aria-label="大小">${['s', 'm', 'l'].map(z => `<button data-act="size" data-v="${z}" aria-pressed="${room.size === z}">${{ s: '小', m: '中', l: '大' }[z]}</button>`).join('')}</div>
-      <button class="btn" data-act="editseats" aria-pressed="${!!room.edit}">🪑 編排座位</button>
       <button class="btn" data-act="multi" aria-pressed="${room.multi}">多選</button>
       <button class="btn" data-act="all">全班加分</button>
-      <button class="btn" data-act="timer">⏱ 計時</button>
-      <button class="btn" data-act="recent">最近操作</button>
     </div>
+    <div class="tool-row">
+      <button class="tool" data-act="pickone">🎲 抽人</button>
+      <button class="tool" data-act="timer">⏱ 計時</button>
+      <button class="tool" data-act="noise">🔊 噪音計</button>
+      <button class="tool" data-act="regroup">👥 分組</button>
+      <button class="tool" data-act="rewards">🎁 兌換</button>
+      <button class="tool" data-act="recent">🕘 最近操作</button>
+      <button class="goal-pill" data-act="goal" id="goal-pill"></button>
+    </div>
+    <div class="mode-tabs" role="tablist" aria-label="模式">${[['points', '⭐ 加分'], ['attend', '📋 點名'], ['hw', '📥 收功課'], ['seats', '🪑 編排座位']].map(([k, l]) => `<button class="mode-tab" role="tab" data-act="mode" data-m="${k}" aria-pressed="${room.mode === k}">${l}</button>`).join('')}</div>
     <div id="quick-bar" class="quick-bar"></div>
     ${state.cls.groups.length ? '<div class="group-row" id="group-row"></div>' : ''}
     <div id="room-grid"></div>
@@ -299,22 +323,35 @@ function renderRoom() {
   ACT.size = (el) => { room.size = el.dataset.v; store.set('size', room.size); $$('[data-act=size]').forEach(b => b.setAttribute('aria-pressed', b === el)); drawRoomGrid(); };
   ACT.multi = (el) => { if (room.edit) return; room.multi = !room.multi; if (!room.multi) room.sel.clear(); el.setAttribute('aria-pressed', room.multi); drawRoomGrid(); };
   ACT.quick = (el) => { room.quick = el.dataset.q; store.set('quick', room.quick); drawQuickBar(); };
-  ACT.all = () => pointSheet(students().map(s => s.id));
+  ACT.all = () => { const ids = present().map(s => s.id); if (!ids.length) return toast('今日全班缺席？請檢查點名'); pointSheet(ids); };
+  ACT.mode = (el) => setMode(el.dataset.m);
+  ACT.pickone = () => pickOne();
+  ACT.noise = () => openNoise();
+  ACT.regroup = () => openRegroup();
+  ACT.rewards = () => openRewards();
+  ACT.goal = () => openGoal();
+  ACT.hwset = (el) => { room.hwStatus = el.dataset.v; drawQuickBar(); };
+  ACT.hwnew = () => newHomeworkQuick();
+  ACT.hwfill = (el) => hwFill(el.dataset.v);
+  ACT.allpresent = () => saveAbsent(new Set());
+  ACT.modedone = () => setMode('points');
   ACT.group = (el, e) => {
     if (e.target.closest('[data-act=groupplus]')) return;
-    const ids = students().filter(s => s.group_id === Number(el.dataset.id)).map(s => s.id);
-    if (!ids.length) return toast('此小組未有組員，請到「學生及分組」編排');
+    const ids = present().filter(s => s.group_id === Number(el.dataset.id)).map(s => s.id);
+    if (!ids.length) return toast('此小組未有出席的組員');
     if (quickOpts()) quickGive(ids); else pointSheet(ids);
   };
   ACT.groupplus = async (el) => {
     const g = state.cls.groups.find(x => x.id === Number(el.dataset.id));
-    const ids = students().filter(s => s.group_id === g.id).map(s => s.id);
-    if (!ids.length) return toast('此小組未有組員');
+    const ids = present().filter(s => s.group_id === g.id).map(s => s.id);
+    if (!ids.length) return toast('此小組未有出席的組員');
     await givePoints(ids, { delta: 1, reason: `${g.name} 小組加分` }); drawRoomGrid(); drawGroupRow();
   };
   ACT.stu = (el) => {
     const id = Number(el.dataset.id);
-    if (room.edit) return seatTap(id);
+    if (room.mode === 'seats') return seatTap(id);
+    if (room.mode === 'attend') return toggleAbsent(id);
+    if (room.mode === 'hw') return markHw(id);
     if (room.multi) { room.sel.has(id) ? room.sel.delete(id) : room.sel.add(id); drawRoomGrid(); }
     else if (quickOpts()) quickGive([id]);
     else pointSheet([id]);
@@ -327,12 +364,7 @@ function renderRoom() {
   ACT.selclear = () => { room.sel.clear(); drawRoomGrid(); };
   ACT.timer = () => openTimer();
   ACT.recent = () => recentDialog();
-  ACT.editseats = () => {
-    room.edit = !room.edit; room.pick = null;
-    if (room.edit) { room.q = ''; room.multi = false; room.sel.clear(); room.sort = 'seats'; }
-    renderRoom();
-  };
-  ACT.seatdone = () => { room.edit = false; room.pick = null; renderRoom(); toast('座位已儲存'); };
+  ACT.seatdone = () => { setMode('points'); toast('座位已儲存'); };
   ACT.cols = (el) => {
     const cols = Math.min(12, Math.max(2, seatCols() + Number(el.dataset.d)));
     if (cols === seatCols()) return;
@@ -344,7 +376,7 @@ function renderRoom() {
     students().slice().sort(byNumber).forEach((s, i) => pos.set(s.id, [Math.floor(i / cols), i % cols]));
     saveSeats(pos, cols);
   };
-  drawQuickBar(); drawGroupRow(); drawRoomGrid();
+  drawQuickBar(); drawGroupRow(); drawGoalPill(); drawRoomGrid();
 }
 
 // 一撳即加：直接給分並彈出祝賀畫面
@@ -415,10 +447,13 @@ function bindSeatDrag(grid) {
 
 function stuCard(s, rc) {
   const g = groupOf(s);
-  const cls = ['stu', room.sel.has(s.id) ? 'sel' : '', room.edit && room.pick === s.id ? 'picked' : ''].filter(Boolean).join(' ');
+  const absent = state.absent.has(s.id);
+  const cls = ['stu', room.sel.has(s.id) ? 'sel' : '', room.edit && room.pick === s.id ? 'picked' : '', absent ? 'absent' : ''].filter(Boolean).join(' ');
+  const hw = room.mode === 'hw' ? room.hwMap.get(s.id) : null;
+  const badge = absent ? '<span class="ribbon absent">缺席</span>' : hw ? `<span class="ribbon hw-${hw}">${HW_LABEL[hw]}</span>` : '';
   return `<div class="${cls}" role="button" tabindex="0" data-act="stu" data-id="${s.id}"${rc ? ` data-r="${rc[0]}" data-c="${rc[1]}"` : ''} ${g ? `style="--gc:${esc(g.color)}"` : ''} aria-label="${esc(s.name)}，${s.score} 分">
     <span class="no">${s.number ?? ''}</span><span class="sc${s.score < 0 ? ' neg' : ''}">${s.score}</span>
-    ${avatar(s)}<span class="nm">${esc(s.name)}</span>${g ? '<span class="gbar"></span>' : ''}</div>`;
+    ${avatar(s)}<span class="nm">${esc(s.name)}</span>${g ? '<span class="gbar"></span>' : ''}${badge}</div>`;
 }
 function drawRoomGrid() {
   const grid = $('#room-grid'); if (!grid) return;
@@ -459,6 +494,330 @@ async function recentDialog() {
     const ok = await confirmBox('撤銷這次加減分？寵物 XP 會一併扣回，但寵物不會退化。', { ok: '撤銷' });
     if (!ok) return; d.close(); undoBatch(Number(u.dataset.undo)).catch(fail);
   });
+}
+
+// ---------- 課室模式切換 ----------
+async function setMode(m) {
+  room.mode = m; room.pick = null;
+  if (m !== 'points') { room.multi = false; room.sel.clear(); }
+  if (m === 'seats') { room.q = ''; room.sort = 'seats'; }
+  if (m === 'hw') {
+    await loadHwList();
+    if (!room.hwId && room.hwList.length) await selectHomework(room.hwList[0].id);
+  }
+  renderRoom();
+}
+
+// ---------- 點名 ----------
+function attendBarHTML() {
+  const n = students().length; const a = students().filter(s => state.absent.has(s.id)).length;
+  return `<span class="qlabel">點名（${esc(state.attDate)}）：撳學生標記缺席，再撳一次改返出席。缺席的同學不會被抽中，全班及小組加分亦會跳過。</span>
+    <span class="chip good">出席 <b class="num">${n - a}</b>／${n}</span>${a ? `<span class="chip bad">缺席 <b class="num">${a}</b></span>` : ''}
+    <button class="btn sm" data-act="allpresent">全部出席</button><button class="btn primary sm" data-act="modedone">完成</button>`;
+}
+function toggleAbsent(id) {
+  const next = new Set(state.absent);
+  next.has(id) ? next.delete(id) : next.add(id);
+  saveAbsent(next);
+}
+async function saveAbsent(next) {
+  const prev = state.absent; state.absent = next; drawQuickBar(); drawRoomGrid();
+  try {
+    if (state.attDate !== todayStr()) state.attDate = todayStr();
+    const r = await PUT(`/classes/${state.classId}/attendance`, { date: state.attDate, absent: [...next] });
+    state.absent = new Set(r.absent); drawQuickBar(); drawRoomGrid();
+  } catch (e) { state.absent = prev; drawQuickBar(); drawRoomGrid(); fail(e); }
+}
+
+// ---------- 座位表收功課 ----------
+const HW_LABEL = { submitted: '已交', late: '遲交', missing: '欠交', excused: '豁免' };
+async function loadHwList() { room.hwList = await GET(`/classes/${state.classId}/homework`); }
+async function selectHomework(id) {
+  const r = await GET(`/homework/${id}/submissions`);
+  room.hwId = id; room.hwMap = new Map(r.entries.map(e => [e.student_id, e.status]));
+  drawQuickBar(); drawRoomGrid();
+}
+function hwBarHTML() {
+  if (!room.hwList.length) return `<span class="qlabel">未有功課。先新增一份，就可以喺座位表逐個撳收功課。</span><button class="btn primary sm" data-act="hwnew">＋ 新功課</button><button class="btn sm" data-act="modedone">完成</button>`;
+  const counts = Object.fromEntries(HW_STATUS.map(([k]) => [k, 0])); room.hwMap.forEach(v => { counts[v]++; });
+  const none = students().length - room.hwMap.size;
+  return `<select class="input" id="hw-pick" style="width:auto;max-width:260px" aria-label="選擇功課">
+      ${room.hwList.map(h => `<option value="${h.id}"${h.id === room.hwId ? ' selected' : ''}>${esc(h.title)}${h.due_date ? `（${fmtDate(h.due_date)}）` : ''}</option>`).join('')}<option value="new">＋ 新功課…</option></select>
+    <span class="qlabel">撳學生記為：</span>
+    ${HW_STATUS.map(([k, l]) => `<button class="qchip hwc hw-${k}" data-act="hwset" data-v="${k}" aria-pressed="${room.hwStatus === k}">${l} <b class="num">${counts[k]}</b></button>`).join('')}
+    <span class="chip">未記錄 <b class="num">${none}</b></span>
+    <button class="btn sm" data-act="hwfill" data-v="missing">未記錄 → 欠交</button>
+    ${state.absent.size ? '<button class="btn sm" data-act="hwfill" data-v="absent">缺席 → 豁免</button>' : ''}
+    <button class="btn primary sm" data-act="modedone">完成</button>`;
+}
+async function markHw(id) {
+  if (!room.hwId) return toast('請先選擇或新增功課', { error: true });
+  const cur = room.hwMap.get(id); const status = cur === room.hwStatus ? null : room.hwStatus; // 再撳同一狀態 = 清除
+  status ? room.hwMap.set(id, status) : room.hwMap.delete(id); drawQuickBar(); drawRoomGrid();
+  try { await PUT(`/homework/${room.hwId}/submissions`, { entries: [{ student_id: id, status }] }); }
+  catch (e) { fail(e); await selectHomework(room.hwId); }
+}
+async function hwFill(kind) {
+  const ids = kind === 'absent' ? students().filter(s => state.absent.has(s.id)).map(s => s.id) : students().filter(s => !room.hwMap.has(s.id) && !state.absent.has(s.id)).map(s => s.id);
+  if (!ids.length) return toast('沒有需要更新的學生');
+  const status = kind === 'absent' ? 'excused' : 'missing';
+  await PUT(`/homework/${room.hwId}/submissions`, { entries: ids.map(student_id => ({ student_id, status })) });
+  await selectHomework(room.hwId); toast(`已把 ${ids.length} 位學生設為「${HW_LABEL[status]}」`);
+}
+function newHomeworkQuick() {
+  const d = openDialog(`<div class="sheet-head"><h2>新增功課</h2><button class="btn ghost" data-close>✕</button></div>
+    <div class="tpl-row">${(state.boot.homework_templates || []).map(t => `<span class="tpl"><button type="button" class="use" data-t="${t.id}">${esc(t.title)}${t.subject ? `<small>${esc(t.subject)}</small>` : ''}</button></span>`).join('')}</div>
+    <form class="stack" data-f><label class="field"><span>功課名稱</span><input class="input" id="nh-title" name="title" required maxlength="60"></label>
+      <div class="row"><label class="field"><span>科目</span><input class="input" id="nh-subj" name="subject" maxlength="20"></label>
+      <label class="field"><span>限期</span><input class="input" id="nh-due" name="due_date" type="date" value="${todayStr()}"></label></div>
+      <button class="btn primary">新增並開始收功課</button></form>`);
+  d.addEventListener('click', (e) => { const b = e.target.closest('[data-t]'); if (!b) return; const t = state.boot.homework_templates.find(x => x.id === Number(b.dataset.t)); $('#nh-title', d).value = t.title; $('#nh-subj', d).value = t.subject; });
+  d.querySelector('[data-f]').onsubmit = async (e) => {
+    e.preventDefault();
+    try { const h = await POST(`/classes/${state.classId}/homework`, Object.fromEntries(new FormData(e.target))); d.close(); await loadHwList(); await selectHomework(h.id); toast(`已新增「${h.title}」`); }
+    catch (err) { fail(err); }
+  };
+}
+
+// ---------- 全班合作目標 ----------
+function drawGoalPill() {
+  const el = $('#goal-pill'); if (!el) return;
+  const g = state.goal?.goal;
+  if (!g) { el.innerHTML = '🏺 設定全班目標'; el.classList.remove('has'); return; }
+  const pct = Math.min(100, Math.round(state.goal.progress / g.target * 100));
+  el.classList.add('has');
+  el.innerHTML = `🏺 <span class="gt">${esc(g.title)}</span> <b class="num">${state.goal.progress}／${g.target}</b><span class="mini"><i style="width:${pct}%"></i></span>`;
+}
+async function refreshGoal() {
+  if (!state.goal?.goal) return;
+  const before = state.goal.progress; const target = state.goal.goal.target;
+  state.goal = await GET(`/classes/${state.classId}/goal`); drawGoalPill();
+  if (before < target && state.goal.progress >= target) setTimeout(() => goalReached(), 1800);
+}
+function goalReached() {
+  const g = state.goal.goal;
+  const el = document.createElement('div'); el.className = 'celebrate goal-win';
+  el.innerHTML = `<div class="cele-card"><div style="font-size:4rem">🏆</div><div class="who">全班達成目標！</div><div class="what">「${esc(g.title)}」・${state.goal.progress}／${g.target} 分</div>
+    <div class="cele-multi">${present().filter(s => s.pet).slice(0, 12).map(s => `<div class="m">${avatar(s)}</div>`).join('')}</div></div>`;
+  document.body.appendChild(el);
+  const card = el.querySelector('.cele-card');
+  for (let i = 0; i < 28; i++) { const sp = document.createElement('i'); sp.className = 'spark'; const a = Math.PI * 2 * i / 28; const dd = 140 + Math.random() * 120;
+    sp.style.cssText = `left:50%;top:30%;--dx:${Math.cos(a) * dd}px;--dy:${Math.sin(a) * dd}px;background:${['var(--gold)', 'var(--accent)', 'var(--sky)', 'var(--mint)', 'var(--lav)'][i % 5]}`; card.appendChild(sp); }
+  card.onclick = () => el.remove(); setTimeout(() => el.remove(), 5000);
+}
+function openGoal() {
+  const g = state.goal?.goal; const n = present().length || students().length;
+  const pct = g ? Math.min(100, Math.round(state.goal.progress / g.target * 100)) : 0;
+  const d = openDialog(`<div class="sheet-head"><h2>全班合作目標</h2><button class="btn ghost" data-close>✕</button></div>
+    ${g ? `<div class="jar-wrap"><div class="jar"><div class="fill" style="height:${pct}%"></div><div class="jar-num num">${pct}%</div></div>
+      <div><div class="jar-title">${esc(g.title)}</div><p class="num" style="font-size:1.4rem;margin:6px 0"><b>${state.goal.progress}</b>／${g.target} 分</p>
+      <p class="muted">${state.goal.progress >= g.target ? '已經達成！🎉' : `仲差 ${g.target - state.goal.progress} 分`}・只計目標開始後全班嘅加分，扣分唔會減少。</p>
+      <button class="btn danger sm" data-end>結束目標</button></div></div><div class="section-label">改設新目標</div>` : '<p class="muted">全班一齊儲分，達成後一齊領獎勵。只計開始後嘅加分，扣分唔會減少進度。</p>'}
+    <form class="row" data-f><label class="field"><span>獎勵</span><input class="input" id="goal-title" name="title" required maxlength="40" placeholder="例如：全班看電影"></label>
+      <label class="field" style="flex:0 0 130px"><span>目標分數</span><input class="input num" id="goal-target" name="target" type="number" min="1" value="${Math.max(20, n * 5)}" required></label>
+      <button class="btn primary">${g ? '開始新目標' : '開始'}</button></form>`);
+  d.querySelector('[data-f]').onsubmit = async (e) => {
+    e.preventDefault();
+    try { state.goal = await POST(`/classes/${state.classId}/goal`, Object.fromEntries(new FormData(e.target))); d.close(); drawGoalPill(); toast('全班目標已開始'); } catch (err) { fail(err); }
+  };
+  d.querySelector('[data-end]')?.addEventListener('click', async () => {
+    if (!(await confirmBox('結束這個全班目標？進度紀錄會保留在分數紀錄內。', { ok: '結束', danger: true }))) return;
+    try { state.goal = await DEL(`/classes/${state.classId}/goal`); d.close(); drawGoalPill(); } catch (err) { fail(err); }
+  });
+}
+
+// ---------- 隨機抽人 ----------
+function pickedSet() { if (!room.picked.has(state.classId)) room.picked.set(state.classId, new Set()); return room.picked.get(state.classId); }
+async function pickOne() {
+  if (room.picking) return;
+  const pool = present(); if (!pool.length) return toast('沒有出席的學生可以抽', { error: true });
+  const used = pickedSet(); let cand = pool.filter(s => !used.has(s.id));
+  if (!cand.length) { used.clear(); cand = pool; toast('全部同學都抽過一次，重新開始'); }
+  const winner = cand[Math.floor(Math.random() * cand.length)]; used.add(winner.id);
+  if (room.mode !== 'points') { room.mode = 'points'; renderRoom(); }
+  const cards = cand.map(s => $(`.stu[data-id="${s.id}"]`)).filter(Boolean);
+  room.picking = true;
+  if (cards.length > 1 && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    let delay = 55; let last = null;
+    while (delay < 340) {
+      const c = cards[Math.floor(Math.random() * cards.length)]; last?.classList.remove('spot'); c.classList.add('spot'); last = c;
+      await new Promise(r => setTimeout(r, delay)); delay *= 1.13;
+    }
+    last?.classList.remove('spot');
+  }
+  const wc = $(`.stu[data-id="${winner.id}"]`); wc?.classList.add('spot'); wc?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  room.picking = false;
+  showPickResult(winner, pool.length, used.size);
+}
+function showPickResult(s, total, done) {
+  const q = quickOpts();
+  const d = openDialog(`<div class="pick-result" data-pick="${s.id}">
+      <div class="muted small">🎲 抽中咗！</div>${avatar(s, 170)}
+      <h2 style="font-size:2rem">${s.number ?? ''} ${esc(s.name)}</h2>
+      <div class="muted small">今堂已抽 ${done}／${total} 人（抽過嘅唔會再抽）</div>
+      <div class="quick" style="justify-content:center">
+        <button class="btn pos" data-d="1">+1</button><button class="btn pos" data-d="2">+2</button>
+        ${q ? `<button class="btn pos" data-q>${q.tag ? `${esc(q.tag.icon)} ${esc(q.tag.label)}` : signed(q.delta)}</button>` : ''}
+      </div>
+      <div class="row" style="justify-content:center"><button class="btn primary" data-again>🎲 再抽一個</button><button class="btn sm" data-reset>重設抽過名單</button><button class="btn ghost sm" data-close>關閉</button></div>
+    </div>`, { onClose: () => $(`.stu[data-id="${s.id}"]`)?.classList.remove('spot') });
+  d.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-d],[data-q],[data-again],[data-reset]'); if (!b) return;
+    if ('again' in b.dataset) { d.close(); return pickOne(); }
+    if ('reset' in b.dataset) { pickedSet().clear(); d.close(); return toast('已重設，所有出席同學都可以再抽'); }
+    d.close();
+    try { await givePoints([s.id], 'q' in b.dataset ? { ...q, quick: true } : { delta: Number(b.dataset.d), reason: '抽中答問題', quick: true }); drawRoomGrid(); drawGroupRow(); }
+    catch (err) { fail(err); }
+  });
+}
+
+// ---------- 獎勵兌換 ----------
+async function openRewards(preId = null) {
+  let sid = preId; let q = '';
+  const recent = await GET(`/classes/${state.classId}/redemptions`).catch(() => []);
+  const d = openDialog('<div id="rw-body"></div>');
+  const body = $('#rw-body', d);
+  const avail = (s) => s.score - (s.spent || 0);
+  const draw = () => {
+    const rewards = state.boot.rewards || [];
+    if (!sid) {
+      const list = students().filter(s => !q || s.name.includes(q) || String(s.number) === q);
+      body.innerHTML = `<div class="sheet-head"><h2>🎁 兌換獎勵</h2><button class="btn ghost" data-close>✕</button></div>
+        <p class="muted small" style="margin-top:0">兌換會扣「可用分數」（總分 − 已兌換），總分紀錄同寵物 XP 都唔會變。</p>
+        <input class="input" id="rw-q" placeholder="搜尋班號或姓名" value="${esc(q)}">
+        <div class="rw-students">${list.map(s => `<button class="rw-stu" data-s="${s.id}">${avatar(s, 52)}<b>${esc(s.name)}</b><span class="num">可用 ${avail(s)}</span></button>`).join('')}</div>
+        ${recent.length ? `<div class="section-label">最近兌換</div><div class="stack" style="gap:6px">${recent.slice(0, 8).map(r => `<div class="status-row"><span class="who">${esc(r.name)} · ${esc(r.title)} <span class="muted small">−${r.cost}・${fmtTime(r.created_at)}</span></span>${r.undone_at ? '<span class="chip">已撤銷</span>' : `<button class="btn sm" data-undo="${r.id}">撤銷</button>`}</div>`).join('')}</div>` : ''}`;
+      const inp = $('#rw-q', body); inp.oninput = () => { q = inp.value.trim(); const pos = inp.selectionStart; draw(); const ni = $('#rw-q', body); ni.focus(); ni.setSelectionRange(pos, pos); };
+    } else {
+      const s = students().find(x => x.id === sid);
+      body.innerHTML = `<div class="sheet-head">${avatar(s, 64)}<div style="flex:1;min-width:0"><h2>${esc(s.name)}</h2><div class="muted small">總分 ${s.score}・已兌換 ${s.spent || 0}・<b class="num" style="color:var(--good)">可用 ${avail(s)} 分</b></div></div><button class="btn ghost" data-close>✕</button></div>
+        <div class="rw-grid">${rewards.map(r => `<button class="rw-item" data-r="${r.id}" ${avail(s) < r.cost ? 'disabled' : ''}><span class="ic">${esc(r.icon)}</span><b>${esc(r.title)}</b><span class="num">${r.cost} 分</span></button>`).join('') || '<p class="muted">未有獎勵，請到「設定」新增。</p>'}</div>
+        <div style="margin-top:12px"><button class="btn ghost sm" data-back>← 揀其他同學</button></div>`;
+    }
+  };
+  d.addEventListener('click', async (e) => {
+    const st = e.target.closest('[data-s]'); if (st) { sid = Number(st.dataset.s); return draw(); }
+    if (e.target.closest('[data-back]')) { sid = null; return draw(); }
+    const un = e.target.closest('[data-undo]');
+    if (un) {
+      try { const r = await POST(`/redemptions/${un.dataset.undo}/undo`); const s = students().find(x => x.id === r.student.id); if (s) s.spent = r.student.spent;
+        const rr = recent.find(x => x.id === Number(un.dataset.undo)); if (rr) rr.undone_at = 'now'; toast('已撤銷兌換'); draw(); } catch (err) { fail(err); }
+      return;
+    }
+    const rb = e.target.closest('[data-r]'); if (!rb || rb.disabled) return;
+    const reward = state.boot.rewards.find(r => r.id === Number(rb.dataset.r)); const s = students().find(x => x.id === sid);
+    if (!(await confirmBox(`${s.name} 用 ${reward.cost} 分兌換「${reward.title}」？`, { ok: '兌換' }))) return;
+    try {
+      const r = await POST('/redemptions', { student_id: sid, reward_id: reward.id });
+      s.spent = r.student.spent; recent.unshift({ id: r.redemption_id, name: s.name, title: r.title, cost: r.cost, created_at: new Date().toISOString(), undone_at: null });
+      body.innerHTML = `<div class="pick-result">${avatar(s, 140)}<div style="font-size:2.6rem">${esc(r.icon)}</div><h2>${esc(s.name)} 兌換咗「${esc(r.title)}」</h2>
+        <p class="muted">用咗 ${r.cost} 分・仲有 <b class="num">${avail(s)}</b> 分可以用</p><div class="row" style="justify-content:center"><button class="btn" data-back>再兌換</button><button class="btn primary" data-close>完成</button></div></div>`;
+      sid = s.id;
+    } catch (err) { fail(err); }
+  });
+  draw();
+}
+
+// ---------- 隨機分組 ----------
+const GROUP_COLORS = ['#8cc4f5', '#ffa3ba', '#8ad9b4', '#ffd166', '#cbb8f5', '#ffb38a', '#9fe0e0', '#f5a3d8', '#b8d98a', '#c9c3ff'];
+async function openRegroup() {
+  let latest = null; // 最近一次考試成績，用於平均能力分組
+  try { const ex = await GET(`/classes/${state.classId}/exams`); if (ex.length) { const r = await GET(`/exams/${ex[0].id}/scores`); latest = { title: ex[0].title, scores: new Map(r.scores.map(x => [x.student_id, x.score])) }; } } catch { /* 沒有成績 */ }
+  let opts = { n: Math.min(6, Math.max(2, Math.round(students().length / 5))), method: 'random', presentOnly: state.absent.size > 0 };
+  let plan = [];
+  const shuffle = (a) => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  const build = () => {
+    const pool = opts.presentOnly ? present() : students().slice(); const n = Math.min(opts.n, Math.max(1, pool.length));
+    const groups = Array.from({ length: n }, () => []);
+    if (opts.method === 'seat') {
+      const { pos } = seatLayout(seatCols());
+      const ordered = pool.slice().sort((a, b) => { const pa = pos.get(a.id); const pb = pos.get(b.id); return pa[0] - pb[0] || pa[1] - pb[1]; });
+      const size = Math.ceil(ordered.length / n); ordered.forEach((s, i) => groups[Math.min(n - 1, Math.floor(i / size))].push(s));
+    } else if (opts.method === 'ability' && latest) {
+      // 蛇形分配：最高分 → 第1組… 再倒轉，令每組能力平均；未有成績的隨機放入
+      const scored = shuffle(pool).sort((a, b) => (latest.scores.get(b.id) ?? -1) - (latest.scores.get(a.id) ?? -1));
+      scored.forEach((s, i) => { const r = Math.floor(i / n); const k = i % n; groups[r % 2 ? n - 1 - k : k].push(s); });
+    } else shuffle(pool).forEach((s, i) => groups[i % n].push(s));
+    plan = groups.map((m, i) => ({ name: `第${i + 1}組`, color: GROUP_COLORS[i % GROUP_COLORS.length], members: m }));
+  };
+  build();
+  const d = openDialog('<div id="rg-body"></div>');
+  const body = $('#rg-body', d);
+  const draw = () => {
+    body.innerHTML = `<div class="sheet-head"><h2>👥 分組</h2><button class="btn ghost" data-close>✕</button></div>
+      <div class="row" style="align-items:center">
+        <label class="field" style="flex:0 0 110px"><span>組數</span><input class="input num" id="rg-n" type="number" min="2" max="10" value="${opts.n}"></label>
+        <label class="field"><span>分法</span><select class="input" id="rg-m">
+          <option value="random">隨機</option><option value="ability"${latest ? '' : ' disabled'}>平均能力${latest ? `（${esc(latest.title)}）` : '（未有考試成績）'}</option><option value="seat">按座位（就近）</option></select></label>
+        <label class="check"><input type="checkbox" id="rg-p" ${opts.presentOnly ? 'checked' : ''}> 只分今日出席學生</label>
+      </div>
+      <div class="rg-groups">${plan.map(g => `<div class="rg-group" style="--gc:${g.color}"><div class="rg-name"><span class="dot"></span>${g.name} <span class="muted small">${g.members.length} 人</span></div>
+        <div class="rg-members">${g.members.map(s => `<span class="rg-m">${avatar(s, 34)}${esc(s.name)}</span>`).join('')}</div></div>`).join('')}</div>
+      <div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" data-again>🔀 再分一次</button><button class="btn primary" data-apply>套用（取代現有小組）</button></div>`;
+    $('#rg-m', body).value = opts.method;
+    $('#rg-n', body).onchange = (e) => { opts.n = Math.min(10, Math.max(2, Number(e.target.value) || 2)); build(); draw(); };
+    $('#rg-m', body).onchange = (e) => { opts.method = e.target.value; build(); draw(); };
+    $('#rg-p', body).onchange = (e) => { opts.presentOnly = e.target.checked; build(); draw(); };
+  };
+  d.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-again]')) { build(); draw(); }
+    if (e.target.closest('[data-apply]')) {
+      try {
+        state.cls = await PUT(`/classes/${state.classId}/regroup`, { groups: plan.map(g => ({ name: g.name, color: g.color, student_ids: g.members.map(s => s.id) })) });
+        d.close(); renderRoom(); toast(`已分成 ${plan.length} 組`);
+      } catch (err) { fail(err); }
+    }
+  });
+  draw();
+}
+
+// ---------- 噪音計 ----------
+function openNoise() {
+  let stream = null; let ctx = null; let raf = 0; let loudSince = 0;
+  let threshold = store.get('noiseTh', 60);
+  const d = openDialog(`<div class="sheet-head"><h2>🔊 噪音計</h2><button class="btn ghost" data-close>✕</button></div>
+    <div class="noise">
+      <div class="noise-face" id="nz-face">🤫</div>
+      <div class="noise-msg" id="nz-msg">撳「開始」用部機嘅咪高峰聽課室聲量</div>
+      <div class="noise-bar"><i id="nz-bar"></i><span class="noise-th" id="nz-th"></span></div>
+      <label class="field"><span>提示門檻（越低越敏感）：<b id="nz-thv" class="num">${threshold}</b></span><input type="range" id="nz-range" min="20" max="95" value="${threshold}"></label>
+      <div class="row" style="justify-content:center"><button class="btn primary" id="nz-start">開始</button><button class="btn" data-fs>全螢幕</button></div>
+      <p class="muted small" style="text-align:center;margin:0">聲音只喺部機即時分析，唔會錄音或者上載；只作畫面提示，唔會自動扣分。</p>
+    </div>`, { full: true, onClose: () => { cancelAnimationFrame(raf); stream?.getTracks().forEach(t => t.stop()); ctx?.close?.(); } });
+  const bar = $('#nz-bar', d); const face = $('#nz-face', d); const msg = $('#nz-msg', d); const th = $('#nz-th', d);
+  const setTh = () => { th.style.left = threshold + '%'; $('#nz-thv', d).textContent = threshold; };
+  setTh();
+  $('#nz-range', d).oninput = (e) => { threshold = Number(e.target.value); store.set('noiseTh', threshold); setTh(); };
+  d.querySelector('[data-fs]').onclick = () => { (document.fullscreenElement ? document.exitFullscreen() : d.requestFullscreen?.())?.catch?.(() => {}); };
+  $('#nz-start', d).onclick = async (e) => {
+    if (stream) return;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false } });
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const an = ctx.createAnalyser(); an.fftSize = 1024; ctx.createMediaStreamSource(stream).connect(an);
+      const buf = new Float32Array(an.fftSize); let level = 0;
+      e.target.textContent = '聆聽中…'; e.target.disabled = true;
+      const loop = () => {
+        an.getFloatTimeDomainData(buf);
+        let sum = 0; for (const v of buf) sum += v * v;
+        const db = 20 * Math.log10(Math.sqrt(sum / buf.length) || 1e-8); // 約 -100（靜）至 0（極嘈）
+        const target = Math.max(0, Math.min(100, (db + 70) * 1.6));
+        level = level * 0.85 + target * 0.15;
+        bar.style.width = level + '%';
+        const loud = level >= threshold;
+        if (loud) loudSince ||= performance.now(); else loudSince = 0;
+        const tooLoud = loudSince && performance.now() - loudSince > 1200;
+        d.querySelector('.noise').classList.toggle('loud', !!tooLoud);
+        bar.style.background = level < threshold * 0.7 ? 'var(--mint)' : level < threshold ? 'var(--gold)' : 'var(--bad)';
+        face.textContent = tooLoud ? '😣' : level < threshold * 0.7 ? '😊' : '😐';
+        msg.textContent = tooLoud ? '太嘈喇！請細聲啲 🤫' : level < threshold * 0.7 ? '好安靜，好叻！' : '有少少嘈，留意聲量';
+        raf = requestAnimationFrame(loop);
+      };
+      loop();
+    } catch {
+      msg.textContent = '未能使用咪高峰：請允許瀏覽器使用咪高峰（預覽頁或部分瀏覽器不支援）。';
+    }
+  };
 }
 
 // ---------- 課堂計時 ----------
@@ -862,7 +1221,7 @@ async function renderStudent(id) {
   const hwCount = (k) => d.homework.filter(h => h.status === k).length;
   shell(null, `
     <div class="page-head"><a class="btn ghost sm" href="#/c/${d.class.id}/room">← ${esc(d.class.name)} 課室</a>
-      <h1>${s.number ?? ''} ${esc(s.name)}</h1><span class="chip gold num" style="font-size:1.1rem">${s.score} 分</span>
+      <h1>${s.number ?? ''} ${esc(s.name)}</h1><span class="chip gold num" style="font-size:1.1rem">${s.score} 分</span>${s.spent ? `<span class="chip good">可用 ${s.score - s.spent}・已兌換 ${s.spent}</span>` : ''}
       <button class="btn primary" data-act="give">加減分</button></div>
     <div class="profile">
       <section class="pet-card">
@@ -918,6 +1277,13 @@ function renderSettings() {
         <form class="row" data-form="newtag" style="margin-top:12px"><label class="field" style="flex:0 0 70px"><span>圖示</span><input class="input" id="nt-icon" name="icon" maxlength="4" value="⭐"></label>
           <label class="field"><span>標籤</span><input class="input" id="nt-label" name="label" maxlength="16" required placeholder="例如：主動清潔"></label>
           <label class="field" style="flex:0 0 90px"><span>分數</span><input class="input num" id="nt-pts" name="points" type="number" min="-20" max="20" value="1" required></label><button class="btn blue">新增</button></form></section>
+      <section class="panel"><h2>🎁 獎勵兌換</h2>
+        <p class="muted small" style="margin-top:0">學生用「可用分數」兌換，總分紀錄及寵物 XP 不受影響。</p>
+        <div class="stack" style="gap:6px">${(state.boot.rewards || []).map(r => `<div class="status-row"><span style="font-size:1.3rem">${esc(r.icon)}</span><span class="who">${esc(r.title)}</span>
+          <span class="chip gold num">${r.cost} 分</span><button class="btn sm" data-act="editreward" data-id="${r.id}">修改</button><button class="btn sm danger" data-act="delreward" data-id="${r.id}">刪除</button></div>`).join('')}</div>
+        <form class="row" data-form="newreward" style="margin-top:12px"><label class="field" style="flex:0 0 70px"><span>圖示</span><input class="input" id="nr-icon" name="icon" maxlength="4" value="🎁"></label>
+          <label class="field"><span>獎勵</span><input class="input" id="nr-title" name="title" maxlength="20" required placeholder="例如：玩桌遊"></label>
+          <label class="field" style="flex:0 0 90px"><span>分數</span><input class="input num" id="nr-cost" name="cost" type="number" min="1" max="1000" value="10" required></label><button class="btn blue">新增</button></form></section>
       <section class="panel"><h2>班別</h2>
         <div class="stack" style="gap:6px">${state.boot.classes.map(c => `<div class="status-row"><span class="who">${esc(c.name)} <span class="muted small">${esc(c.school_year)} · ${c.student_count} 人</span></span>
           <button class="btn sm" data-act="renclass" data-id="${c.id}">改名</button><button class="btn sm danger" data-act="delclass" data-id="${c.id}">刪除</button></div>`).join('')}</div></section>
@@ -937,6 +1303,16 @@ function renderSettings() {
       <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-close>取消</button><button class="btn primary">儲存</button></div></form>`);
     d.querySelector('[data-f]').onsubmit = async (e) => { e.preventDefault(); try { await PATCH(`/tags/${t.id}`, Object.fromEntries(new FormData(e.target))); d.close(); await reloadBoot(); renderSettings(); } catch (err) { fail(err); } };
   };
+  ACT['submit:newreward'] = async (_f, fd) => { state.boot.rewards = await POST('/rewards', Object.fromEntries(fd)); renderSettings(); };
+  ACT.editreward = (el) => {
+    const r = state.boot.rewards.find(x => x.id === Number(el.dataset.id));
+    const d = openDialog(`<form class="stack" data-f><label class="field"><span>圖示</span><input class="input" id="er-icon" name="icon" maxlength="4" value="${esc(r.icon)}"></label>
+      <label class="field"><span>獎勵</span><input class="input" id="er-title" name="title" maxlength="20" value="${esc(r.title)}" required></label>
+      <label class="field"><span>所需分數</span><input class="input num" id="er-cost" name="cost" type="number" min="1" max="1000" value="${r.cost}" required></label>
+      <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-close>取消</button><button class="btn primary">儲存</button></div></form>`);
+    d.querySelector('[data-f]').onsubmit = async (e) => { e.preventDefault(); try { state.boot.rewards = await PATCH(`/rewards/${r.id}`, Object.fromEntries(new FormData(e.target))); d.close(); renderSettings(); } catch (err) { fail(err); } };
+  };
+  ACT.delreward = async (el) => { if (await confirmBox('刪除此獎勵？過往兌換紀錄會保留。', { ok: '刪除', danger: true })) { state.boot.rewards = await DEL(`/rewards/${el.dataset.id}`); renderSettings(); } };
   ACT.deltag = async (el) => { if (await confirmBox('刪除此標籤？過往紀錄會保留分數。', { ok: '刪除', danger: true })) { await DEL(`/tags/${el.dataset.id}`); await reloadBoot(); renderSettings(); } };
   ACT.renclass = (el) => editDialog('班別名稱', state.boot.classes.find(c => c.id === Number(el.dataset.id)).name, async (v) => { await PATCH(`/classes/${el.dataset.id}`, { name: v }); await reloadBoot(); renderSettings(); });
   ACT.delclass = async (el) => {

@@ -161,3 +161,48 @@ CREATE TABLE IF NOT EXISTS homework_templates (
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   UNIQUE (teacher_id, title, subject)
 );
+
+-- 點名：只記錄缺席（每位學生每日一筆）
+CREATE TABLE IF NOT EXISTS attendance (
+  teacher_id  INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+  class_id    INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+  student_id  INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  date        TEXT NOT NULL,              -- YYYY-MM-DD（香港日期，由老師裝置提供）
+  status      TEXT NOT NULL DEFAULT 'absent' CHECK (status IN ('absent')),
+  PRIMARY KEY (student_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_attendance_class ON attendance(class_id, date);
+
+-- 全班合作目標：只計目標開始後、未撤銷的正向課堂加分
+CREATE TABLE IF NOT EXISTS class_goals (
+  id                INTEGER PRIMARY KEY,
+  teacher_id        INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+  class_id          INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+  title             TEXT NOT NULL,
+  target            INTEGER NOT NULL CHECK (target > 0),
+  baseline_event_id INTEGER NOT NULL DEFAULT 0,
+  created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  ended_at          TEXT
+);
+
+-- 獎勵兌換：扣「可用分數」（總分 − 已兌換），總分紀錄及寵物 XP 不受影響
+CREATE TABLE IF NOT EXISTS rewards (
+  id          INTEGER PRIMARY KEY,
+  teacher_id  INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+  title       TEXT NOT NULL,
+  cost        INTEGER NOT NULL CHECK (cost > 0),
+  icon        TEXT NOT NULL DEFAULT '🎁',
+  sort        INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS redemptions (
+  id          INTEGER PRIMARY KEY,
+  teacher_id  INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+  class_id    INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+  student_id  INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  reward_id   INTEGER REFERENCES rewards(id) ON DELETE SET NULL,
+  title       TEXT NOT NULL,
+  cost        INTEGER NOT NULL CHECK (cost > 0),
+  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  undone_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_redemptions_student ON redemptions(student_id);

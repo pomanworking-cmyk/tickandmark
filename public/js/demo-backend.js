@@ -17,9 +17,9 @@ export function createDemoBackend(initial) {
   const S = initial ? clone(initial) : {
     seq: {}, teachers: [], settings: [], classes: [], groups: [], students: [], behavior_tags: [],
     score_batches: [], score_events: [], student_pets: [], pet_xp_ledger: [], homework: [],
-    homework_submissions: [], exams: [], exam_scores: [], homework_templates: [],
+    homework_submissions: [], exams: [], exam_scores: [], homework_templates: [], attendance: [], class_goals: [], rewards: [], redemptions: [],
   };
-  const nextId = (t) => (S.seq[t] = (S.seq[t] || 0) + 1);
+  const nextId = (t) => S[t].reduce((m, r) => Math.max(m, r.id), 0) + 1; // 與 SQLite rowid 相同：現有最大值 + 1
   const insert = (t, row) => { const r = { id: nextId(t), created_at: now(), ...row }; S[t].push(r); return r; };
   const own = (t, id, tid) => { const r = S[t].find(x => x.id === id && x.teacher_id === tid); if (!r) throw notFound(); return r; };
   const txn = (fn) => { const snap = clone(S); try { return fn(); } catch (e) { Object.assign(S, snap); throw e; } };
@@ -31,7 +31,8 @@ export function createDemoBackend(initial) {
     const { id, student_record_id, species_key, stage, xp, baseline_event_id, nickname, accessories, assigned_at, hatched_at } = p;
     return clone({ id, student_record_id, species_key, stage, xp, baseline_event_id, nickname, accessories, assigned_at, hatched_at });
   };
-  const studentFull = (sid) => { const s = S.students.find(s => s.id === sid); return { ...clone(s), pet: petOf(sid) }; };
+  const spentOf = (sid) => S.redemptions.filter(r => r.student_id === sid && !r.undone_at).reduce((a, r) => a + r.cost, 0);
+  const studentFull = (sid) => { const s = S.students.find(s => s.id === sid); return { ...clone(s), spent: spentOf(sid), pet: petOf(sid) }; };
   const sortStudents = (a, b) => (a.number == null) - (b.number == null) || (a.number ?? 0) - (b.number ?? 0) || a.id - b.id;
   const studentsOf = (cid) => S.students.filter(s => s.class_id === cid).sort(sortStudents).map(s => studentFull(s.id));
   const tagOf = (id) => S.behavior_tags.find(t => t.id === id);
@@ -43,7 +44,16 @@ export function createDemoBackend(initial) {
       ['收拾整齊', 1, '🧹'], ['欠交功課', -1, '📕'], ['不守秩序', -1, '🔇']]
       .forEach(([label, points, icon], sort) => insert('behavior_tags', { teacher_id: tid, label, points, icon, sort }));
     [['中文作文', '中文'], ['英文默書', '英文'], ['數學工作紙', '數學'], ['常識工作紙', '常識']].forEach(([title, subject]) => addTemplate(tid, title, subject));
+    [['貼紙一張', 5, '⭐'], ['做小老師', 10, '🧑‍🏫'], ['自己揀位一日', 15, '🪑'], ['免抄一次', 20, '📝']].forEach(([title, cost, icon], sort) => insert('rewards', { teacher_id: tid, title, cost, icon, sort }));
   }
+  const isDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''));
+  const listRewards = (tid) => S.rewards.filter(r => r.teacher_id === tid).sort((a, b) => a.sort - b.sort || a.id - b.id).map(({ id, title, cost, icon, sort }) => ({ id, title, cost, icon, sort }));
+  const goalOf = (cid) => {
+    const g = S.class_goals.filter(g => g.class_id === cid && !g.ended_at).sort((a, b) => b.id - a.id)[0];
+    if (!g) return { goal: null, progress: 0 };
+    const progress = S.score_events.filter(e => e.class_id === cid && e.kind === 'point' && e.delta > 0 && !e.undone_at && e.id > g.baseline_event_id).reduce((a, e) => a + e.delta, 0);
+    return { goal: { id: g.id, title: g.title, target: g.target, created_at: g.created_at }, progress };
+  };
   function addTemplate(tid, title, subject) {
     if (!S.homework_templates.some(t => t.teacher_id === tid && t.title === title && t.subject === subject)) insert('homework_templates', { teacher_id: tid, title, subject });
   }
@@ -78,7 +88,78 @@ export function createDemoBackend(initial) {
 
   on('GET', '/bootstrap', ({ tid }) => ({ thresholds: thresholdsOf(tid), timer_presets: settingsOf(tid).timer_presets,
     tags: clone(S.behavior_tags.filter(t => t.teacher_id === tid).sort((a, b) => a.sort - b.sort || a.id - b.id)), classes: listClasses(tid),
-    homework_templates: listTemplates(tid) }));
+    homework_templates: listTemplates(tid), rewards: listRewards(tid) }));
+  on('GET', '/classes/:id/attendance', ({ tid, p, q }) => {
+    const c = own('classes', p.id, tid); if (!isDate(q.date)) throw bad('日期格式不正確');
+    return { date: q.date, absent: S.attendance.filter(a => a.class_id === c.id && a.date === q.date).map(a => a.student_id).sort((a, b) => a - b) };
+  });
+  on('PUT', '/classes/:id/attendance', ({ tid, p, body }) => {
+    const c = own('classes', p.id, tid); if (!isDate(body.date)) throw bad('日期格式不正確');
+    const ids = [...new Set((body.absent || []).map(int))];
+    txn(() => {
+      S.attendance = S.attendance.filter(a => !(a.class_id === c.id && a.date === body.date));
+      for (const id of ids) { const s = own('students', id, tid); if (s.class_id !== c.id) throw bad('學生不屬於此班'); S.attendance.push({ teacher_id: tid, class_id: c.id, student_id: s.id, date: body.date, status: 'absent' }); }
+    });
+    return { date: body.date, absent: ids.sort((a, b) => a - b) };
+  });
+  on('GET', '/classes/:id/goal', ({ tid, p }) => goalOf(own('classes', p.id, tid).id));
+  on('POST', '/classes/:id/goal', ({ tid, p, body }) => {
+    const c = own('classes', p.id, tid); const title = str(body.title, 40); const target = int(body.target);
+    if (!title) throw bad('請輸入目標獎勵，例如「全班看電影」');
+    if (!(target >= 1 && target <= 100000)) throw bad('目標分數須為 1 至 100000');
+    S.class_goals.filter(g => g.class_id === c.id && !g.ended_at).forEach(g => { g.ended_at = now(); });
+    insert('class_goals', { teacher_id: tid, class_id: c.id, title, target, baseline_event_id: Math.max(0, ...S.score_events.map(e => e.id)), ended_at: null });
+    return goalOf(c.id);
+  });
+  on('DELETE', '/classes/:id/goal', ({ tid, p }) => {
+    const c = own('classes', p.id, tid); S.class_goals.filter(g => g.class_id === c.id && !g.ended_at).forEach(g => { g.ended_at = now(); }); return goalOf(c.id);
+  });
+  on('GET', '/rewards', ({ tid }) => listRewards(tid));
+  on('POST', '/rewards', ({ tid, body }) => {
+    const title = str(body.title, 20); const cost = int(body.cost);
+    if (!title || !(cost >= 1 && cost <= 1000)) throw bad('請輸入獎勵名稱，所需分數為 1 至 1000');
+    const sort = Math.max(0, ...S.rewards.filter(r => r.teacher_id === tid).map(r => r.sort)) + 1;
+    insert('rewards', { teacher_id: tid, title, cost, icon: str(body.icon, 4) || '🎁', sort }); return listRewards(tid);
+  });
+  on('PATCH', '/rewards/:id', ({ tid, p, body }) => {
+    const r = own('rewards', p.id, tid); const cost = body.cost !== undefined ? int(body.cost) : r.cost;
+    if (!(cost >= 1 && cost <= 1000)) throw bad('所需分數為 1 至 1000');
+    Object.assign(r, { title: str(body.title ?? r.title, 20) || r.title, cost, icon: str(body.icon ?? r.icon, 4) || r.icon }); return listRewards(tid);
+  });
+  on('DELETE', '/rewards/:id', ({ tid, p }) => { own('rewards', p.id, tid); S.rewards = S.rewards.filter(r => r.id !== p.id); S.redemptions.forEach(x => { if (x.reward_id === p.id) x.reward_id = null; }); return listRewards(tid); });
+  on('POST', '/redemptions', ({ tid, body }) => {
+    const s = own('students', int(body.student_id), tid); const r = own('rewards', int(body.reward_id), tid);
+    const cur = studentFull(s.id);
+    if (cur.score - cur.spent < r.cost) throw bad(`${s.name} 可用分數只有 ${cur.score - cur.spent} 分，不夠兌換「${r.title}」（${r.cost} 分）`);
+    const x = insert('redemptions', { teacher_id: tid, class_id: s.class_id, student_id: s.id, reward_id: r.id, title: r.title, cost: r.cost, undone_at: null });
+    return { redemption_id: x.id, title: r.title, icon: r.icon, cost: r.cost, student: studentFull(s.id) };
+  });
+  on('POST', '/redemptions/:id/undo', ({ tid, p }) => {
+    const r = own('redemptions', p.id, tid); if (r.undone_at) throw bad('此兌換已撤銷'); r.undone_at = now(); return { student: studentFull(r.student_id) };
+  });
+  on('GET', '/classes/:id/redemptions', ({ tid, p }) => {
+    const c = own('classes', p.id, tid);
+    return S.redemptions.filter(r => r.class_id === c.id).sort((a, b) => b.id - a.id).slice(0, 100)
+      .map(r => ({ id: r.id, student_id: r.student_id, name: S.students.find(s => s.id === r.student_id)?.name, title: r.title, cost: r.cost, created_at: r.created_at, undone_at: r.undone_at }));
+  });
+  on('PUT', '/classes/:id/regroup', ({ tid, p, body }) => {
+    const c = own('classes', p.id, tid); const groups = Array.isArray(body.groups) ? body.groups : [];
+    if (!groups.length || groups.length > 20) throw bad('組數須為 1 至 20');
+    const seen = new Set();
+    txn(() => {
+      S.students.filter(s => s.class_id === c.id).forEach(s => { s.group_id = null; });
+      S.groups = S.groups.filter(g => g.class_id !== c.id);
+      for (const g of groups) {
+        const name = str(g.name, 20); if (!name) throw bad('小組名稱不可留空');
+        const ng = insert('groups', { teacher_id: tid, class_id: c.id, name, color: str(g.color, 9) || '#8cc4f5' });
+        for (const sid of (g.student_ids || []).map(int)) {
+          const s = own('students', sid, tid); if (s.class_id !== c.id) throw bad('學生不屬於此班');
+          if (seen.has(sid)) throw bad('同一位學生不可同時在兩組'); seen.add(sid); s.group_id = ng.id;
+        }
+      }
+    });
+    return { class: clone(c), students: studentsOf(c.id), groups: clone(S.groups.filter(g => g.class_id === c.id)) };
+  });
   on('GET', '/homework-templates', ({ tid }) => listTemplates(tid));
   on('POST', '/homework-templates', ({ tid, body }) => { const title = str(body.title, 60); if (!title) throw bad('請輸入功課名稱'); addTemplate(tid, title, str(body.subject, 20)); return listTemplates(tid); });
   on('DELETE', '/homework-templates/:id', ({ tid, p }) => { own('homework_templates', p.id, tid); S.homework_templates = S.homework_templates.filter(t => t.id !== p.id); return listTemplates(tid); });
@@ -161,6 +242,7 @@ export function createDemoBackend(initial) {
     own('students', p.id, tid); S.students = S.students.filter(s => s.id !== p.id);
     const pet = S.student_pets.find(x => x.student_record_id === p.id);
     S.student_pets = S.student_pets.filter(x => x !== pet); S.score_events = S.score_events.filter(e => e.student_id !== p.id);
+    S.redemptions = S.redemptions.filter(r => r.student_id !== p.id); S.attendance = S.attendance.filter(a => a.student_id !== p.id);
     if (pet) S.pet_xp_ledger = S.pet_xp_ledger.filter(l => l.pet_id !== pet.id);
     return { ok: true };
   });

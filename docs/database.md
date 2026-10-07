@@ -19,6 +19,10 @@ erDiagram
   classes ||--o{ homework : has
   homework ||--o{ homework_submissions : has
   teachers ||--o{ homework_templates : saves
+  classes ||--o{ attendance : records
+  classes ||--o{ class_goals : sets
+  teachers ||--o{ rewards : offers
+  students ||--o{ redemptions : redeems
   classes ||--o{ exams : has
   exams ||--o{ exam_scores : has
 ```
@@ -38,6 +42,9 @@ erDiagram
 | `pet_xp_ledger` | XP 入帳 | `score_event_id` 為主鍵（同一筆加分只可入帳一次）；`stage_before`／`stage_after`；`reversed_at`（撤銷） |
 | `homework` / `homework_submissions` | 功課及提交 | 狀態：`submitted` 已交、`late` 遲交、`missing` 欠交、`excused` 豁免 |
 | `homework_templates` | 常用功課範本（老師本人，所有班別共用） | `UNIQUE(teacher_id, title, subject)`；新老師預設 4 個 |
+| `attendance` | 點名（只記缺席） | `PRIMARY KEY(student_id, date)`；date 為老師裝置的香港日期 |
+| `class_goals` | 全班合作目標 | `target`；`baseline_event_id`（只計之後未撤銷的正向課堂加分）；`ended_at` |
+| `rewards` / `redemptions` | 獎勵及兌換 | 可用分數 ＝ 總分 − 未撤銷兌換總和；總分及寵物 XP 不受影響；`undone_at` |
 | `exams` / `exam_scores` | 考試成績 | `full_mark`；分數範圍 0 至滿分 |
 
 ## 不變條件（`GET /api/audit` 逐項檢查）

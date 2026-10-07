@@ -176,6 +176,50 @@ async function scenario(c) {
     assert.equal(reread.students.filter(x => x.seat_row !== null).length, 9, '失敗的更改不會影響已儲存座位');
     L('seats', reread.students.map(x => [x.id, x.seat_row, x.seat_col]));
 
+    // 點名
+    const c4a = classes['4A'].id;
+    let att = await c.req('PUT', `/classes/${c4a}/attendance`, { date: '2026-10-07', absent: [a4ids[2], a4ids[3]] });
+    assert.deepEqual(att.absent, [a4ids[2], a4ids[3]].sort((x, y) => x - y));
+    assert.deepEqual((await c.req('GET', `/classes/${c4a}/attendance?date=2026-10-07`)).absent, att.absent);
+    assert.deepEqual((await c.req('GET', `/classes/${c4a}/attendance?date=2026-10-08`)).absent, []);
+    await assert.rejects(c.req('GET', `/classes/${c4a}/attendance?date=7-10`), /日期/);
+    await assert.rejects(c.req('PUT', `/classes/${c4a}/attendance`, { date: '2026-10-07', absent: [S['4B'][0].id] }), /不屬於此班/);
+
+    // 全班合作目標：只計開始後的正向加分，撤銷會扣回
+    let goal = await c.req('POST', `/classes/${c4a}/goal`, { title: '全班看電影', target: 10 });
+    assert.equal(goal.progress, 0); assert.equal(goal.goal.target, 10);
+    await c.req('POST', '/points', { class_id: c4a, student_ids: [a4ids[4], a4ids[5]], delta: 3, client_batch_id: 'goal-1' });
+    const gneg = await c.req('POST', '/points', { class_id: c4a, student_ids: [a4ids[4]], delta: -2, client_batch_id: 'goal-2' });
+    goal = await c.req('GET', `/classes/${c4a}/goal`); assert.equal(goal.progress, 6, '扣分不減全班目標');
+    const g3 = await c.req('POST', '/points', { class_id: c4a, student_ids: [a4ids[6]], delta: 4, client_batch_id: 'goal-3' });
+    await c.req('POST', `/batches/${g3.batch_id}/undo`);
+    goal = await c.req('GET', `/classes/${c4a}/goal`); assert.equal(goal.progress, 6, '撤銷的加分不計');
+    await assert.rejects(c.req('POST', `/classes/${c4a}/goal`, { title: '', target: 10 }), /目標獎勵/);
+    goal = await c.req('POST', `/classes/${c4a}/goal`, { title: '全班旅行', target: 50 }); assert.equal(goal.progress, 0, '新目標重新計');
+    goal = await c.req('DELETE', `/classes/${c4a}/goal`); assert.equal(goal.goal, null);
+    L('goal-neg', gneg.results[0].score);
+
+    // 獎勵兌換：扣可用分數，總分及寵物 XP 不變
+    assert.equal(boot.rewards.length, 4);
+    const rich = (await c.req('GET', `/students/${a4ids[0]}`)).student;
+    const sticker = boot.rewards.find(r => r.cost === 5); const big = boot.rewards.find(r => r.cost === 20);
+    const red = await c.req('POST', '/redemptions', { student_id: rich.id, reward_id: sticker.id });
+    assert.equal(red.student.score, rich.score, '總分不變'); assert.equal(red.student.spent, 5); assert.equal(red.student.pet.xp, rich.pet.xp, '寵物 XP 不變');
+    const poor = (await c.req('GET', `/students/${a4ids[8]}`)).student;
+    if (poor.score - poor.spent < 20) await assert.rejects(c.req('POST', '/redemptions', { student_id: poor.id, reward_id: big.id }), /不夠兌換/);
+    const und = await c.req('POST', `/redemptions/${red.redemption_id}/undo`); assert.equal(und.student.spent, 0);
+    await assert.rejects(c.req('POST', `/redemptions/${red.redemption_id}/undo`), /已撤銷/);
+    let rw = await c.req('POST', '/rewards', { title: '玩桌遊', cost: 30, icon: '🎲' }); assert.equal(rw.length, 5);
+    rw = await c.req('PATCH', `/rewards/${rw.find(r => r.title === '玩桌遊').id}`, { cost: 25 }); assert.equal(rw.find(r => r.title === '玩桌遊').cost, 25);
+    rw = await c.req('DELETE', `/rewards/${rw.find(r => r.title === '玩桌遊').id}`); assert.equal(rw.length, 4);
+    L('redemptions', (await c.req('GET', `/classes/${c4a}/redemptions`)).map(r => [r.name, r.title, r.cost, !!r.undone_at]));
+
+    // 重新分組
+    const rg = await c.req('PUT', `/classes/${c4a}/regroup`, { groups: [{ name: '第1組', color: '#ffa3ba', student_ids: a4ids.slice(0, 4) }, { name: '第2組', student_ids: a4ids.slice(4) }] });
+    assert.equal(rg.groups.length, 2); assert.equal(rg.students.filter(x => x.group_id === rg.groups[0].id).length, 4);
+    await assert.rejects(c.req('PUT', `/classes/${c4a}/regroup`, { groups: [{ name: 'A', student_ids: [a4ids[0]] }, { name: 'B', student_ids: [a4ids[0]] }] }), /兩組/);
+    L('regroup', rg.groups.map(g => [g.id, g.name, g.color]));
+
     // 常用功課範本：預設 4 個、新增、重複略過、刪除
     assert.equal(boot.homework_templates.length, 4, '新老師有 4 個預設常用功課');
     let tpl = await c.req('POST', '/homework-templates', { title: '英文閱讀報告', subject: '英文' });

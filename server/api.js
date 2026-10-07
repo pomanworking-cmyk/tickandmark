@@ -14,6 +14,7 @@ const DEFAULT_TAGS = [
   ['收拾整齊', 1, '🧹'], ['欠交功課', -1, '📕'], ['不守秩序', -1, '🔇'],
 ];
 
+const DEFAULT_REWARDS = [['貼紙一張', 5, '⭐'], ['做小老師', 10, '🧑‍🏫'], ['自己揀位一日', 15, '🪑'], ['免抄一次', 20, '📝']];
 const DEFAULT_HW_TEMPLATES = [['中文作文', '中文'], ['英文默書', '英文'], ['數學工作紙', '數學'], ['常識工作紙', '常識']];
 
 const str = (v, max = 80) => String(v ?? '').trim().slice(0, max);
@@ -27,7 +28,10 @@ export function seedTeacher(db, teacherId) {
   DEFAULT_TAGS.forEach(([l, p, i], n) => ins.run(teacherId, l, p, i, n));
   const tpl = db.prepare('INSERT OR IGNORE INTO homework_templates (teacher_id, title, subject) VALUES (?,?,?)');
   DEFAULT_HW_TEMPLATES.forEach(([t, sj]) => tpl.run(teacherId, t, sj));
+  const rw = db.prepare('INSERT INTO rewards (teacher_id, title, cost, icon, sort) VALUES (?,?,?,?,?)');
+  DEFAULT_REWARDS.forEach(([t, c, i], n) => rw.run(teacherId, t, c, i, n));
 }
+const isDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''));
 
 export function createApi(db) {
   const routes = [];
@@ -54,13 +58,15 @@ export function createApi(db) {
   });
   const petOf = (studentId) => petRow(db.prepare('SELECT * FROM student_pets WHERE student_record_id = ?').get(studentId));
   const studentsOf = (classId) => {
-    const rows = db.prepare('SELECT * FROM students WHERE class_id = ? ORDER BY number IS NULL, number, id').all(classId);
+    const rows = db.prepare(`SELECT s.*, (SELECT COALESCE(SUM(cost),0) FROM redemptions r WHERE r.student_id = s.id AND r.undone_at IS NULL) AS spent
+      FROM students s WHERE s.class_id = ? ORDER BY s.number IS NULL, s.number, s.id`).all(classId);
     const pets = db.prepare('SELECT p.* FROM student_pets p JOIN students s ON s.id = p.student_record_id WHERE s.class_id = ?').all(classId);
     const byStudent = new Map(pets.map(p => [p.student_record_id, petRow(p)]));
     return rows.map(s => ({ ...s, pet: byStudent.get(s.id) || null }));
   };
   const studentFull = (id) => {
-    const s = db.prepare('SELECT * FROM students WHERE id = ?').get(id);
+    const s = db.prepare(`SELECT s.*, (SELECT COALESCE(SUM(cost),0) FROM redemptions r WHERE r.student_id = s.id AND r.undone_at IS NULL) AS spent
+      FROM students s WHERE s.id = ?`).get(id);
     return { ...s, pet: petOf(id) };
   };
 
@@ -71,6 +77,7 @@ export function createApi(db) {
     tags: db.prepare('SELECT * FROM behavior_tags WHERE teacher_id = ? ORDER BY sort, id').all(tid),
     classes: listClasses(tid),
     homework_templates: listTemplates(tid),
+    rewards: listRewards(tid),
   }));
   const listTemplates = (tid) => db.prepare('SELECT id, title, subject FROM homework_templates WHERE teacher_id = ? ORDER BY subject, title, id').all(tid);
 
@@ -116,6 +123,107 @@ export function createApi(db) {
       students: studentsOf(c.id),
       groups: db.prepare('SELECT * FROM groups WHERE class_id = ? ORDER BY id').all(c.id),
     };
+  });
+
+  // ---------- 點名 ----------
+  on('GET', '/classes/:id/attendance', ({ tid, p, q }) => {
+    const c = own('classes', p.id, tid); if (!isDate(q.date)) throw bad('日期格式不正確');
+    return { date: q.date, absent: db.prepare('SELECT student_id FROM attendance WHERE class_id = ? AND date = ? ORDER BY student_id').all(c.id, q.date).map(r => r.student_id) };
+  });
+  on('PUT', '/classes/:id/attendance', ({ tid, p, body }) => {
+    const c = own('classes', p.id, tid); if (!isDate(body.date)) throw bad('日期格式不正確');
+    const ids = [...new Set((body.absent || []).map(int))];
+    tx(db, () => {
+      db.prepare('DELETE FROM attendance WHERE class_id = ? AND date = ?').run(c.id, body.date);
+      for (const id of ids) {
+        const s = own('students', id, tid); if (s.class_id !== c.id) throw bad('學生不屬於此班');
+        db.prepare("INSERT INTO attendance (teacher_id, class_id, student_id, date, status) VALUES (?,?,?,?, 'absent')").run(tid, c.id, s.id, body.date);
+      }
+    });
+    return { date: body.date, absent: ids.sort((a, b) => a - b) };
+  });
+
+  // ---------- 全班合作目標 ----------
+  const goalOf = (cid) => {
+    const g = db.prepare('SELECT * FROM class_goals WHERE class_id = ? AND ended_at IS NULL ORDER BY id DESC LIMIT 1').get(cid);
+    if (!g) return { goal: null, progress: 0 };
+    const progress = db.prepare("SELECT COALESCE(SUM(delta),0) n FROM score_events WHERE class_id = ? AND kind = 'point' AND delta > 0 AND undone_at IS NULL AND id > ?").get(cid, g.baseline_event_id).n;
+    return { goal: { id: g.id, title: g.title, target: g.target, created_at: g.created_at }, progress };
+  };
+  on('GET', '/classes/:id/goal', ({ tid, p }) => goalOf(own('classes', p.id, tid).id));
+  on('POST', '/classes/:id/goal', ({ tid, p, body }) => {
+    const c = own('classes', p.id, tid); const title = str(body.title, 40); const target = int(body.target);
+    if (!title) throw bad('請輸入目標獎勵，例如「全班看電影」');
+    if (!(target >= 1 && target <= 100000)) throw bad('目標分數須為 1 至 100000');
+    tx(db, () => {
+      db.prepare('UPDATE class_goals SET ended_at = ? WHERE class_id = ? AND ended_at IS NULL').run(now(), c.id);
+      const base = db.prepare('SELECT COALESCE(MAX(id),0) m FROM score_events').get().m;
+      db.prepare('INSERT INTO class_goals (teacher_id, class_id, title, target, baseline_event_id) VALUES (?,?,?,?,?)').run(tid, c.id, title, target, base);
+    });
+    return goalOf(c.id);
+  });
+  on('DELETE', '/classes/:id/goal', ({ tid, p }) => {
+    const c = own('classes', p.id, tid);
+    db.prepare('UPDATE class_goals SET ended_at = ? WHERE class_id = ? AND ended_at IS NULL').run(now(), c.id);
+    return goalOf(c.id);
+  });
+
+  // ---------- 獎勵兌換 ----------
+  const listRewards = (tid) => db.prepare('SELECT id, title, cost, icon, sort FROM rewards WHERE teacher_id = ? ORDER BY sort, id').all(tid);
+  on('GET', '/rewards', ({ tid }) => listRewards(tid));
+  on('POST', '/rewards', ({ tid, body }) => {
+    const title = str(body.title, 20); const cost = int(body.cost);
+    if (!title || !(cost >= 1 && cost <= 1000)) throw bad('請輸入獎勵名稱，所需分數為 1 至 1000');
+    const sort = (db.prepare('SELECT MAX(sort) m FROM rewards WHERE teacher_id = ?').get(tid).m ?? 0) + 1;
+    db.prepare('INSERT INTO rewards (teacher_id, title, cost, icon, sort) VALUES (?,?,?,?,?)').run(tid, title, cost, str(body.icon, 4) || '🎁', sort);
+    return listRewards(tid);
+  });
+  on('PATCH', '/rewards/:id', ({ tid, p, body }) => {
+    const r = own('rewards', p.id, tid); const cost = body.cost !== undefined ? int(body.cost) : r.cost;
+    if (!(cost >= 1 && cost <= 1000)) throw bad('所需分數為 1 至 1000');
+    db.prepare('UPDATE rewards SET title = ?, cost = ?, icon = ? WHERE id = ?').run(str(body.title ?? r.title, 20) || r.title, cost, str(body.icon ?? r.icon, 4) || r.icon, r.id);
+    return listRewards(tid);
+  });
+  on('DELETE', '/rewards/:id', ({ tid, p }) => { own('rewards', p.id, tid); db.prepare('DELETE FROM rewards WHERE id = ?').run(p.id); return listRewards(tid); });
+  on('POST', '/redemptions', ({ tid, body }) => {
+    const s = own('students', int(body.student_id), tid); const r = own('rewards', int(body.reward_id), tid);
+    return tx(db, () => {
+      const cur = studentFull(s.id);
+      if (cur.score - cur.spent < r.cost) throw bad(`${s.name} 可用分數只有 ${cur.score - cur.spent} 分，不夠兌換「${r.title}」（${r.cost} 分）`);
+      const ins = db.prepare('INSERT INTO redemptions (teacher_id, class_id, student_id, reward_id, title, cost) VALUES (?,?,?,?,?,?)').run(tid, s.class_id, s.id, r.id, r.title, r.cost);
+      return { redemption_id: Number(ins.lastInsertRowid), title: r.title, icon: r.icon, cost: r.cost, student: studentFull(s.id) };
+    });
+  });
+  on('POST', '/redemptions/:id/undo', ({ tid, p }) => {
+    const r = own('redemptions', p.id, tid); if (r.undone_at) throw bad('此兌換已撤銷');
+    db.prepare('UPDATE redemptions SET undone_at = ? WHERE id = ?').run(now(), r.id);
+    return { student: studentFull(r.student_id) };
+  });
+  on('GET', '/classes/:id/redemptions', ({ tid, p }) => {
+    const c = own('classes', p.id, tid);
+    return db.prepare(`SELECT r.id, r.student_id, s.name, r.title, r.cost, r.created_at, r.undone_at FROM redemptions r JOIN students s ON s.id = r.student_id
+      WHERE r.class_id = ? ORDER BY r.id DESC LIMIT 100`).all(c.id);
+  });
+
+  // ---------- 重新分組（一次過取代全班小組） ----------
+  on('PUT', '/classes/:id/regroup', ({ tid, p, body }) => {
+    const c = own('classes', p.id, tid); const groups = Array.isArray(body.groups) ? body.groups : [];
+    if (!groups.length || groups.length > 20) throw bad('組數須為 1 至 20');
+    const seen = new Set();
+    tx(db, () => {
+      db.prepare('UPDATE students SET group_id = NULL WHERE class_id = ?').run(c.id);
+      db.prepare('DELETE FROM groups WHERE class_id = ?').run(c.id);
+      for (const g of groups) {
+        const name = str(g.name, 20); if (!name) throw bad('小組名稱不可留空');
+        const gid = Number(db.prepare('INSERT INTO groups (teacher_id, class_id, name, color) VALUES (?,?,?,?)').run(tid, c.id, name, str(g.color, 9) || '#8cc4f5').lastInsertRowid);
+        for (const sid of (g.student_ids || []).map(int)) {
+          const s = own('students', sid, tid); if (s.class_id !== c.id) throw bad('學生不屬於此班');
+          if (seen.has(sid)) throw bad('同一位學生不可同時在兩組'); seen.add(sid);
+          db.prepare('UPDATE students SET group_id = ? WHERE id = ?').run(gid, sid);
+        }
+      }
+    });
+    return { class: own('classes', c.id, tid), students: studentsOf(c.id), groups: db.prepare('SELECT * FROM groups WHERE class_id = ? ORDER BY id').all(c.id) };
   });
 
   // ---------- 座位表 ----------

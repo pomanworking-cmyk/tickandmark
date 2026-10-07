@@ -33,6 +33,14 @@ with open(csv, 'wb') as f: f.write(('學號,姓名\n' + '\n'.join(f'{i+1},{n}' f
 def api(page, method, path, body=None):
     return page.evaluate("""async ([m, p, b]) => { const r = await fetch('/api' + p, { method: m, headers: { 'content-type': 'application/json', 'x-tm': '1' }, body: b ? JSON.stringify(b) : undefined }); return r.json(); }""", [method, path, body])
 
+def wait_js(page, expr, timeout=15):
+    # CSP 禁止 eval，所以用 evaluate 輪詢
+    end = time.time() + timeout
+    while time.time() < end:
+        if page.evaluate(f"() => {expr}"): return
+        time.sleep(0.1)
+    raise TimeoutError(expr)
+
 def dom_avatars(page, selector):
     return page.eval_on_selector_all(selector, "els => els.map(e => ({ s: e.dataset.student, sp: e.dataset.species, st: e.dataset.stage, src: e.querySelector('img')?.getAttribute('src') || null }))")
 
@@ -53,7 +61,7 @@ def verify_against_db(page, label, avatars, by_id):
 errors = []
 try:
     with sync_playwright() as p:
-        br = p.chromium.launch()
+        br = p.chromium.launch(args=['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'])
         ctx = br.new_context(viewport={'width': 1280, 'height': 860}, locale='zh-HK')
         page = ctx.new_page()
         page.on('console', lambda m: errors.append(m.text) if m.type == 'error' and 'ERR_TUNNEL_CONNECTION_FAILED' not in m.text else None)  # 測試環境封鎖 Google Fonts
@@ -207,7 +215,7 @@ try:
         page.click('.qchip[data-q="menu"]'); page.wait_for_timeout(2000)
 
         # 座位表：拖動到空位、點選交換、每行座位數，並重新載入確認已儲存
-        page.click('[data-act=editseats]'); page.wait_for_selector('.seats.editing')
+        page.click('[data-act=mode][data-m=seats]'); page.wait_for_selector('.seats.editing')
         cards = api(page, 'GET', f"/classes/{ids['4B']}/full")['students']
         mover = cards[0]
         empty = page.locator('.seats .seat-empty').last; eb = empty.bounding_box(); er, ec = int(empty.get_attribute('data-r')), int(empty.get_attribute('data-c'))
@@ -233,6 +241,85 @@ try:
         verify_against_db(page, '4B 座位表模式', dom_avatars(page, '#room-grid .avatar'), {x['id']: x for x in api(page, 'GET', f"/classes/{ids['4B']}/full")['students']})
         page.screenshot(path=f'{OUT}/seat-chart.png', full_page=True)
 
+        # ===== 課堂工具（4B）=====
+        page.goto(BASE + f"#/c/{ids['4B']}/room"); page.wait_for_selector('.stu')
+        roster = api(page, 'GET', f"/classes/{ids['4B']}/full")['students']
+        absent_ids = [roster[1]['id'], roster[4]['id']]
+        # 1) 點名
+        page.click('[data-act=mode][data-m=attend]'); page.wait_for_selector('.quick-bar.editing')
+        for sid in absent_ids: page.click(f'.stu[data-id="{sid}"]'); page.wait_for_timeout(250)
+        att = api(page, 'GET', f"/classes/{ids['4B']}/attendance?date=" + page.evaluate("(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })()"))
+        check('點名：缺席紀錄存入資料庫', sorted(att['absent']) == sorted(absent_ids), str(att))
+        check('點名：缺席同學顯示灰色及「缺席」', all('absent' in page.get_attribute(f'.stu[data-id="{sid}"]', 'class') for sid in absent_ids))
+        page.screenshot(path=f'{OUT}/attendance.png', full_page=True)
+        page.click('[data-act=modedone]'); page.click('[data-act=all]'); page.wait_for_selector('dialog .tag-grid')
+        check('全班加分自動跳過缺席', page.inner_text('dialog h2').strip() == f"{len(roster) - 2} 位同學", page.inner_text('dialog h2'))
+        page.click('dialog [data-close]')
+        # 2) 隨機抽人：抽晒出席同學，不重複、不抽缺席
+        picks = []
+        for _ in range(len(roster) - 2):
+            page.click('[data-act=pickone]'); page.wait_for_selector('dialog .pick-result', timeout=8000)
+            picks.append(int(page.get_attribute('dialog .pick-result', 'data-pick'))); page.click('dialog [data-close]'); page.wait_for_timeout(150)
+        check('隨機抽人：不重複、不抽缺席', len(set(picks)) == len(roster) - 2 and not set(picks) & set(absent_ids), str(picks))
+        page.click('[data-act=pickone]'); page.wait_for_selector('dialog .pick-result', timeout=8000)
+        page.screenshot(path=f'{OUT}/pick.png')
+        winner = int(page.get_attribute('dialog .pick-result', 'data-pick')); before_w = next(x for x in api(page, 'GET', f"/classes/{ids['4B']}/full")['students'] if x['id'] == winner)['score']
+        page.click('dialog .pick-result [data-d="1"]'); page.wait_for_selector(f'.celebrate .cele-card[data-cele-student="{winner}"]')
+        check('抽中後一撳 +1 並彈出', next(x for x in api(page, 'GET', f"/classes/{ids['4B']}/full")['students'] if x['id'] == winner)['score'] == before_w + 1)
+        page.click('.celebrate .cele-card')
+        # 3) 座位表收功課
+        page.click('[data-act=mode][data-m=hw]'); page.wait_for_selector('[data-act=hwnew]')
+        page.click('[data-act=hwnew]'); page.click('dialog .tpl .use >> nth=0'); page.click('dialog button:has-text("新增並開始收功課")')
+        page.wait_for_selector('#hw-pick')
+        hwid = int(page.input_value('#hw-pick'))
+        present_ids = [x['id'] for x in roster if x['id'] not in absent_ids]
+        for sid in present_ids[:3]: page.click(f'.stu[data-id="{sid}"]'); page.wait_for_timeout(200)
+        page.click('.qchip.hwc[data-v=missing]'); page.click(f'.stu[data-id="{present_ids[3]}"]'); page.wait_for_timeout(200)
+        page.click(f'.stu[data-id="{present_ids[4]}"]'); page.wait_for_timeout(200); page.click(f'.stu[data-id="{present_ids[4]}"]'); page.wait_for_timeout(300)
+        sub = {e['student_id']: e['status'] for e in api(page, 'GET', f"/homework/{hwid}/submissions")['entries']}
+        check('收功課：撳學生記為已交／欠交，再撳清除', all(sub.get(i) == 'submitted' for i in present_ids[:3]) and sub.get(present_ids[3]) == 'missing' and present_ids[4] not in sub, str(sub))
+        check('收功課：座位卡顯示狀態', page.inner_text(f'.stu[data-id="{present_ids[0]}"] .ribbon') == '已交')
+        page.click('[data-act=hwfill][data-v=absent]'); page.wait_for_timeout(400); page.click('[data-act=hwfill][data-v=missing]'); page.wait_for_timeout(400)
+        sub = {e['student_id']: e['status'] for e in api(page, 'GET', f"/homework/{hwid}/submissions")['entries']}
+        check('收功課：缺席→豁免、未記錄→欠交', all(sub.get(i) == 'excused' for i in absent_ids) and len(sub) == len(roster) and sub.get(present_ids[4]) == 'missing', str(sub))
+        page.screenshot(path=f'{OUT}/homework-seats.png', full_page=True)
+        page.click('[data-act=modedone]')
+        # 4) 全班合作目標
+        page.click('#goal-pill'); page.fill('#goal-title', '全班看電影'); page.fill('#goal-target', '10'); page.click('dialog button:has-text("開始")')
+        page.wait_for_selector('#goal-pill.has')
+        page.click('[data-act=multi]')
+        for sid in present_ids[:4]: page.click(f'.stu[data-id="{sid}"]')
+        page.click('.qchip[data-q="d:3"]'); page.click('[data-act=selgo]')
+        page.wait_for_selector('.celebrate.goal-win', timeout=8000)
+        page.screenshot(path=f'{OUT}/goal-win.png')
+        g = api(page, 'GET', f"/classes/{ids['4B']}/goal")
+        check('全班目標：加分計入，達成時彈出慶祝', g['progress'] == 12 and '12' in page.inner_text('#goal-pill'), str(g))
+        page.click('.celebrate.goal-win .cele-card'); page.click('.qchip[data-q="menu"]')
+        page.click('#goal-pill'); page.wait_for_selector('dialog .jar'); page.screenshot(path=f'{OUT}/goal-jar.png'); page.click('dialog [data-close]')
+        # 5) 獎勵兌換
+        cur = {x['id']: x for x in api(page, 'GET', f"/classes/{ids['4B']}/full")['students']}
+        buyer = max(cur.values(), key=lambda x: x['score'] - x['spent'])
+        page.click('[data-act=rewards]'); page.click(f'dialog [data-s="{buyer["id"]}"]'); page.wait_for_selector('dialog .rw-item')
+        page.click('dialog .rw-item:not([disabled]) >> nth=0'); page.click('dialog button:has-text("兌換") >> nth=-1')
+        page.wait_for_selector('dialog .pick-result'); page.screenshot(path=f'{OUT}/reward.png')
+        after_b = next(x for x in api(page, 'GET', f"/classes/{ids['4B']}/full")['students'] if x['id'] == buyer['id'])
+        check('兌換：扣可用分數，總分及寵物 XP 不變', after_b['spent'] == buyer['spent'] + 5 and after_b['score'] == buyer['score'] and (after_b['pet'] or {}).get('xp') == (buyer['pet'] or {}).get('xp'), f"spent {buyer['spent']}→{after_b['spent']}")
+        page.click('dialog [data-close]')
+        # 6) 分組（只分出席學生）
+        page.click('[data-act=regroup]'); page.wait_for_selector('dialog .rg-group'); page.fill('#rg-n', '3'); page.dispatch_event('#rg-n', 'change')
+        page.wait_for_timeout(200); page.screenshot(path=f'{OUT}/regroup.png'); page.click('dialog [data-apply]'); page.wait_for_timeout(500)
+        f = api(page, 'GET', f"/classes/{ids['4B']}/full")
+        check('分組：3 組、出席學生全部有組、缺席不分組', len(f['groups']) == 3 and all(x['group_id'] for x in f['students'] if x['id'] in present_ids) and all(x['group_id'] is None for x in f['students'] if x['id'] in absent_ids))
+        sizes = sorted(sum(1 for x in f['students'] if x['group_id'] == g['id']) for g in f['groups'])
+        check('分組：人數平均', sizes[-1] - sizes[0] <= 1, str(sizes))
+        # 7) 噪音計（假咪高峰）
+        page.click('[data-act=noise]'); page.click('#nz-start'); page.wait_for_timeout(1500)
+        nz = page.evaluate("({ w: parseFloat(document.getElementById('nz-bar').style.width) || 0, msg: document.getElementById('nz-msg').textContent })")
+        page.screenshot(path=f'{OUT}/noise.png')
+        check('噪音計：讀到咪高峰聲量', nz['w'] > 0 and '未能使用' not in nz['msg'], str(nz))
+        page.click('dialog [data-close]')
+        api(page, 'PUT', f"/classes/{ids['4B']}/attendance", {'date': att['date'], 'absent': []})
+
         # 隨機加分令各班處於不同階段，然後逐頁核對
         random.seed(7)
         for cn in ['4A', '4B', '6C']:
@@ -242,9 +329,9 @@ try:
                 if n: api(page, 'POST', '/points', {'class_id': ids[cn], 'student_ids': [s['id']], 'delta': min(n, 100), 'client_batch_id': f'r-{s["id"]}'})
         for cn in ['4A', '4B', '6C']:
             f = api(page, 'GET', f"/classes/{ids[cn]}/full"); by = {s['id']: s for s in f['students']}
-            page.goto(BASE + f"#/c/{ids[cn]}/room"); page.wait_for_selector('.stu')
+            page.goto(BASE + f"#/c/{ids[cn]}/room"); wait_js(page, f"document.getElementById('class-switch')?.value === '{ids[cn]}' && !!document.querySelector('#room-grid .stu')")
             verify_against_db(page, f'{cn} 課室模式', dom_avatars(page, '#room-grid .avatar'), by)
-            page.goto(BASE + f"#/c/{ids[cn]}/pets"); page.wait_for_selector('h1')
+            page.goto(BASE + f"#/c/{ids[cn]}/pets"); wait_js(page, f"document.getElementById('class-switch')?.value === '{ids[cn]}' && !!document.querySelector('.tab[aria-current=page]')?.href.endsWith('/pets')")
             verify_against_db(page, f'{cn} 寵物頁', dom_avatars(page, '.pet-list .avatar, .status-grid .avatar'), by)
             page.goto(BASE + f"#/c/{ids[cn]}/poster"); page.wait_for_selector('#poster')
             verify_against_db(page, f'{cn} 海報', dom_avatars(page, '#poster .avatar'), by)
