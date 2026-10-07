@@ -1,0 +1,6 @@
+data/
+dist/
+test-output/
+node_modules/
+*.db
+*.db-*

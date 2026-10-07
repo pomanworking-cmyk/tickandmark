@@ -1,0 +1,12 @@
+{
+  "name": "tick-and-mark",
+  "version": "1.0.0",
+  "description": "香港小學班級管理及寵物獎勵系統",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+  }
+}
