@@ -568,3 +568,19 @@ h1 { font-size: 1.45rem; } h2 { font-size: 1.15rem; } h3 { font-size: 1rem; }
 .cele-card .delta { font-size: 2.6rem; }
 .section-label { font-size: .76rem; }
 @media (max-width: 600px) { html { font-size: 14px; } }
+
+/* ===== 欠交功課提醒 ===== */
+.hungry-bubble.hw { color: #4f5fb0; border-color: #c3cdf5; box-shadow: 0 2px 0 #dde3fb; }
+.hungry-bubble.hw::after { border-color: #c3cdf5; }
+.hungry-bubble.swap { display: grid; }
+.hungry-bubble.swap > span { grid-area: 1 / 1; animation: swapA 5s infinite; }
+.hungry-bubble.swap > .b { animation-name: swapB; color: #b5651d; }
+@keyframes swapA { 0%, 45% { opacity: 1; } 50%, 95% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes swapB { 0%, 45% { opacity: 0; } 50%, 95% { opacity: 1; } 100% { opacity: 0; } }
+.missing-pill { border-color: #c3cdf5; background: #f1f4ff; color: #4f5fb0; }
+.speech.hw { border-color: #c3cdf5; color: #4f5fb0; } .speech.hw::after { border-color: #c3cdf5; }
+.pet-card .speech + .speech { margin-top: -2px; }
+.remind-line { margin-top: 8px; background: #f1f4ff; color: #4f5fb0; font-weight: 800; border-radius: 14px; padding: 5px 12px; font-size: .9rem; }
+.cele-multi .m .lv.hw { background: #f1f4ff; color: #4f5fb0; }
+.ms-say { display: block; color: #4f5fb0; font-size: .85rem; font-weight: 700; margin: 2px 0 4px; }
+.ms-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 0; border-top: 1px dashed var(--line); font-weight: 600; font-size: .92rem; }

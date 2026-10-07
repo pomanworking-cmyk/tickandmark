@@ -566,6 +566,12 @@ export function createApi(db) {
       FROM homework h LEFT JOIN homework_submissions hs ON hs.homework_id = h.id
       WHERE h.class_id = ? GROUP BY h.id ORDER BY h.due_date DESC, h.id DESC`).all(c.id);
   });
+  // 欠交功課（寵物會提醒主人）
+  on('GET', '/classes/:id/missing-homework', ({ tid, p }) => {
+    const c = own('classes', p.id, tid);
+    return db.prepare(`SELECT hs.student_id, h.id AS homework_id, h.title, h.subject, h.due_date FROM homework_submissions hs JOIN homework h ON h.id = hs.homework_id
+      WHERE h.class_id = ? AND hs.status = 'missing' ORDER BY h.due_date, h.id, hs.student_id`).all(c.id);
+  });
   on('POST', '/classes/:id/homework', ({ tid, p, body }) => {
     const c = own('classes', p.id, tid); const title = str(body.title, 60);
     if (!title) throw bad('請輸入功課名稱');

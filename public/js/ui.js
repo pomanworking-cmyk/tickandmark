@@ -80,7 +80,7 @@ export function confirmBox(message, { ok = '確定', danger = false } = {}) {
 
 // ---------- 加分祝賀彈窗 ----------
 const stageWord = (from, to) => (from === 'egg' ? '孵化了！' : `進化成${STAGE_LABELS[to]}！`);
-export function celebrate(results, { label, thresholds, quick = false, fed = new Set() }) {
+export function celebrate(results, { label, thresholds, quick = false, fed = new Set(), remind = new Map() }) {
   const pos = results.filter(r => r.delta > 0);
   if (!pos.length) return showDeduction(results, { label, quick });
   document.querySelector('.celebrate')?.remove();
@@ -100,12 +100,13 @@ export function celebrate(results, { label, thresholds, quick = false, fed = new
       ${r.pet ? `<div class="xpline"><span>${esc(petLabel(r.pet))}${r.pet.nickname ? `「${esc(r.pet.nickname)}」` : ''}</span><span class="num">XP ${r.pet.xp}${pa.next ? '／' + pa.need : ''}</span></div>
         <div class="xpbar"><i style="width:${r.leveled_up ? 0 : pb}%" data-to="${pa.pct}"></i></div>` : '<div class="muted small" style="margin-top:8px">未派蛋，派蛋後的加分才會成為寵物 XP</div>'}
       ${r.leveled_up ? `<div class="levelup">${esc(stageWord(r.stage_before, r.stage_after))}</div>` : ''}
+      ${remind.get(r.student_id) ? `<div class="remind-line">${esc(remind.get(r.student_id))}</div>` : ''}
     </div>`;
   } else {
     inner = `<div class="cele-card" style="width:min(640px,100%)">
       <div class="delta num">+${pos[0].delta}</div><div class="what">${esc(label || '')} · ${pos.length} 位同學</div>
       <div class="cele-multi">${pos.map((r, i) => `<div class="m" style="animation-delay:${Math.min(i, 20) * 40}ms" data-cele-student="${r.student_id}">
-        ${avatar({ id: r.student_id, name: r.name, pet: r.pet })}<b>${esc(r.name)}</b>${fed.has(r.student_id) ? '<span class="lv fed">食飽喇 😋</span>' : ''}${r.leveled_up ? `<span class="lv">${esc(stageWord(r.stage_before, r.stage_after))}</span>` : ''}</div>`).join('')}</div>
+        ${avatar({ id: r.student_id, name: r.name, pet: r.pet })}<b>${esc(r.name)}</b>${fed.has(r.student_id) ? '<span class="lv fed">食飽喇 😋</span>' : ''}${remind.get(r.student_id) ? '<span class="lv hw">記得交功課📕</span>' : ''}${r.leveled_up ? `<span class="lv">${esc(stageWord(r.stage_before, r.stage_after))}</span>` : ''}</div>`).join('')}</div>
     </div>`;
   }
   el.innerHTML = inner;

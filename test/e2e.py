@@ -284,6 +284,25 @@ try:
         check('收功課：缺席→豁免、未記錄→欠交', all(sub.get(i) == 'excused' for i in absent_ids) and len(sub) == len(roster) and sub.get(present_ids[4]) == 'missing', str(sub))
         page.screenshot(path=f'{OUT}/homework-seats.png', full_page=True)
         page.click('[data-act=modedone]')
+        # 寵物提醒交功課
+        page.wait_for_timeout(400)
+        miss_ids = [i for i, v in sub.items() if v == 'missing']
+        pet_miss = [i for i in miss_ids if next(x for x in roster if x['id'] == i)['pet']]
+        check('寵物提醒：欠交學生卡出現「交功課」氣泡', all(page.locator(f'.stu[data-id="{i}"] .hungry-bubble.hw').count() == 1 for i in pet_miss) and pet_miss, str(pet_miss))
+        check('寵物提醒：已交學生冇氣泡', page.locator(f'.stu[data-id="{present_ids[0]}"] .hungry-bubble.hw').count() == 0)
+        check('寵物提醒：工具列顯示欠交人數', page.inner_text('#missing-pill').strip().endswith(str(len(miss_ids))), page.inner_text('#missing-pill'))
+        page.click('#missing-pill'); page.wait_for_selector('dialog [data-fix]'); page.screenshot(path=f'{OUT}/missing-list.png')
+        page.click(f'dialog [data-fix="submitted"][data-s="{pet_miss[0]}"]'); page.wait_for_timeout(500)
+        check('補交後提醒消失', page.locator(f'.stu[data-id="{pet_miss[0]}"] .hungry-bubble.hw').count() == 0 and {e['student_id']: e['status'] for e in api(page, 'GET', f"/homework/{hwid}/submissions")['entries']}[pet_miss[0]] == 'submitted')
+        page.click('dialog [data-close]')
+        page.click('.qchip[data-q="d:1"]'); page.click(f'.stu[data-id="{pet_miss[1]}"]', position={'x': 20, 'y': 30})
+        page.wait_for_selector(f'.celebrate .cele-card[data-cele-student="{pet_miss[1]}"] .remind-line')
+        check('加分彈窗：寵物提醒記得交功課', '中文作文' in page.inner_text('.celebrate .remind-line'), page.inner_text('.celebrate .remind-line'))
+        page.screenshot(path=f'{OUT}/missing-remind.png')
+        page.click('.celebrate .cele-card'); page.click('.qchip[data-q="menu"]')
+        page.goto(BASE + f"#/s/{pet_miss[1]}"); page.wait_for_selector('.pet-card .speech.hw')
+        check('學生頁：寵物講出欠交功課', '中文作文' in page.inner_text('.pet-card .speech.hw'))
+        page.goto(BASE + f"#/c/{ids['4B']}/room"); wait_js(page, f"document.getElementById('class-switch')?.value === '{ids['4B']}' && !!document.querySelector('#room-grid .stu')")
         # 4) 全班合作目標
         page.click('#goal-pill'); page.fill('#goal-title', '全班看電影'); page.fill('#goal-target', '10'); page.click('dialog button:has-text("開始")')
         page.wait_for_selector('#goal-pill.has')
@@ -337,7 +356,7 @@ try:
             verify_against_db(page, f'{cn} 海報', dom_avatars(page, '#poster .avatar'), by)
             sample = random.sample(f['students'], 2)
             for s in sample:
-                page.goto(BASE + f"#/s/{s['id']}"); page.wait_for_selector('.pet-card')
+                page.goto(BASE + f"#/s/{s['id']}"); wait_js(page, f"document.querySelector('.pet-card > .avatar')?.dataset.student === '{s['id']}'")
                 av = dom_avatars(page, '.pet-card > .avatar')
                 verify_against_db(page, f'{cn} 學生資料頁 {s["name"]}', av, by)
                 if s['pet']:

@@ -5,7 +5,7 @@ import { SPECIES, STAGES, STAGE_LABELS, speciesByKey, petLabel, progressInfo, hu
 import { readFileToStudents, textToStudents, ocrImage } from './importer.js';
 
 const app = document.getElementById('app');
-const state = { teacher: null, boot: null, cls: null, classId: null, importRows: [], hwCache: null, absent: new Set(), attDate: '', goal: null };
+const state = { teacher: null, boot: null, cls: null, classId: null, importRows: [], hwCache: null, absent: new Set(), attDate: '', goal: null, missing: new Map() };
 const store = {
   get(k, d) { try { const v = localStorage.getItem('tm.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('tm.' + k, JSON.stringify(v)); } catch { /* 私密瀏覽 */ } },
@@ -87,8 +87,24 @@ async function route() {
 }
 async function loadRoomExtras() {
   const date = todayStr();
-  const [att, goal] = await Promise.all([GET(`/classes/${state.classId}/attendance?date=${date}`), GET(`/classes/${state.classId}/goal`)]);
-  state.absent = new Set(att.absent); state.attDate = date; state.goal = goal;
+  const [att, goal, miss] = await Promise.all([GET(`/classes/${state.classId}/attendance?date=${date}`), GET(`/classes/${state.classId}/goal`), GET(`/classes/${state.classId}/missing-homework`)]);
+  state.absent = new Set(att.absent); state.attDate = date; state.goal = goal; setMissing(miss);
+}
+function setMissing(rows) {
+  state.missing = new Map();
+  for (const r of rows) { if (!state.missing.has(r.student_id)) state.missing.set(r.student_id, []); state.missing.get(r.student_id).push(r); }
+}
+async function refreshMissing() {
+  setMissing(await GET(`/classes/${state.classId}/missing-homework`));
+  drawMissingPill(); drawRoomGrid();
+}
+const missingOf = (s) => state.missing.get(s.id) || [];
+// 寵物提醒交功課的說話
+function homeworkMessage(s, list = missingOf(s)) {
+  if (!list.length) return '';
+  const egg = s.pet?.stage === 'egg';
+  if (list.length === 1) return egg ? `主人，交埋「${list[0].title}」我就快啲孵化喇！` : `主人，記得交「${list[0].title}」呀！📕`;
+  return egg ? `主人，仲有 ${list.length} 份功課未交，我等緊你呀！` : `主人，仲有 ${list.length} 份功課未交呀！📕`;
 }
 const present = () => students().filter(s => !state.absent.has(s.id));
 const hungerDays = () => state.boot?.hunger_days ?? 3;
@@ -102,6 +118,16 @@ function hungerBubble(s, big = false) {
   }
   const egg = s.pet.stage === 'egg';
   return `<span class="hungry-bubble lv${lv}">${lv === 2 ? '幫幫我！' : egg ? '好凍～' : '肚餓～'}</span>`;
+}
+// 課室卡上的小氣泡：欠交功課及肚餓都有時輪流顯示
+function petBubble(s) {
+  if (!s.pet || state.absent.has(s.id)) return '';
+  const hw = missingOf(s).length; const lv = hungerOf(s);
+  const hwText = hw > 1 ? `${hw} 份功課未交📕` : '交功課呀📕';
+  const hunger = lv ? (lv === 2 ? '幫幫我！' : s.pet.stage === 'egg' ? '好凍～' : '肚餓～') : '';
+  if (hw && lv) return `<span class="hungry-bubble hw swap"><span class="a">${hwText}</span><span class="b">${hunger}</span></span>`;
+  if (hw) return `<span class="hungry-bubble hw">${hwText}</span>`;
+  return lv ? hungerBubble(s) : '';
 }
 async function reloadClass() { state.cls = await GET(`/classes/${state.classId}/full`); }
 async function reloadBoot() { state.boot = await GET('/bootstrap'); }
@@ -176,7 +202,8 @@ async function givePoints(ids, { delta, tag, reason, quick = false }) {
   const label = res.label;
   const d = res.results[0]?.delta ?? 0;
   const fed = new Set(res.results.filter(r => r.xp_gained > 0 && hungryBefore.has(r.student_id)).map(r => r.student_id));
-  celebrate(res.results, { label, thresholds: thresholds(), quick, fed });
+  const remind = new Map(res.results.map(r => [r.student_id, homeworkMessage({ id: r.student_id, pet: r.pet }, state.missing.get(r.student_id) || [])]).filter(([, m]) => m));
+  celebrate(res.results, { label, thresholds: thresholds(), quick, fed, remind });
   if (fed.size) drawHungryPill();
   const names = res.results.length > 3 ? `${res.results.length} 位同學` : res.results.map(r => r.name).join('、');
   toast(`${names} ${signed(d)}（${label}）`, { action: () => undoBatch(res.batch_id), actionLabel: '撤銷' });
@@ -312,6 +339,7 @@ function renderRoom() {
       <button class="tool" data-act="rewards">🎁 兌換</button>
       <button class="tool" data-act="recent">🕘 最近操作</button>
       <button class="tool hungry-pill" data-act="hungry" id="hungry-pill" hidden></button>
+      <button class="tool missing-pill" data-act="missinghw" id="missing-pill" hidden></button>
       <button class="goal-pill" data-act="goal" id="goal-pill"></button>
     </div>
     <div class="mode-tabs" role="tablist" aria-label="模式">${[['points', '⭐ 加分'], ['attend', '📋 點名'], ['hw', '📥 收功課'], ['seats', '🪑 編排座位']].map(([k, l]) => `<button class="mode-tab" role="tab" data-act="mode" data-m="${k}" aria-pressed="${room.mode === k}">${l}</button>`).join('')}</div>
@@ -347,6 +375,7 @@ function renderRoom() {
   ACT.rewards = () => openRewards();
   ACT.goal = () => openGoal();
   ACT.hungry = () => openHungry();
+  ACT.missinghw = () => openMissing();
   ACT.hwset = (el) => { room.hwStatus = el.dataset.v; drawQuickBar(); };
   ACT.hwnew = () => newHomeworkQuick();
   ACT.hwfill = (el) => hwFill(el.dataset.v);
@@ -393,7 +422,34 @@ function renderRoom() {
     students().slice().sort(byNumber).forEach((s, i) => pos.set(s.id, [Math.floor(i / cols), i % cols]));
     saveSeats(pos, cols);
   };
-  drawQuickBar(); drawGroupRow(); drawGoalPill(); drawHungryPill(); drawRoomGrid();
+  drawQuickBar(); drawGroupRow(); drawGoalPill(); drawHungryPill(); drawMissingPill(); drawRoomGrid();
+}
+function drawMissingPill() {
+  const el = $('#missing-pill'); if (!el) return;
+  const n = students().filter(s => missingOf(s).length).length; el.hidden = !n;
+  el.innerHTML = `📕 欠交功課 <b class="num">${n}</b>`;
+}
+function openMissing() {
+  const d = openDialog('<div id="ms-body"></div>');
+  const draw = () => {
+    const list = students().filter(s => missingOf(s).length).sort(byNumber);
+    $('#ms-body', d).innerHTML = `<div class="sheet-head"><h2>📕 欠交功課</h2><button class="btn ghost" data-close>✕</button></div>
+      <p class="muted small" style="margin-top:0">記錄為「欠交」的功課，寵物會喺課室提醒主人。學生補交後撳「已交」或「遲交」，提醒就會消失。</p>
+      ${list.length ? `<div class="stack" style="gap:8px">${list.map(s => `<div class="status-row" style="align-items:flex-start">${avatar(s, 46)}<span class="who">${s.number ?? ''} ${esc(s.name)}
+        <span class="ms-say">💬 ${esc(homeworkMessage(s))}</span>
+        ${missingOf(s).map(m => `<span class="ms-item"><span>${esc(m.title)}${m.due_date ? ` <span class="muted small">限期 ${fmtDate(m.due_date)}</span>` : ''}</span>
+          <span class="seg">${['submitted', 'late', 'excused'].map(k => `<button data-fix="${k}" data-h="${m.homework_id}" data-s="${s.id}">${HW_LABEL[k]}</button>`).join('')}</span></span>`).join('')}</span></div>`).join('')}</div>`
+        : '<div class="empty">全部功課都交齊晒 🎉</div>'}`;
+  };
+  d.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-fix]'); if (!b) return;
+    try {
+      await PUT(`/homework/${b.dataset.h}/submissions`, { entries: [{ student_id: Number(b.dataset.s), status: b.dataset.fix }] });
+      await refreshMissing(); if (room.hwId === Number(b.dataset.h)) await selectHomework(room.hwId);
+      toast(`已記錄為「${HW_LABEL[b.dataset.fix]}」`); draw();
+    } catch (err) { fail(err); }
+  });
+  draw();
 }
 function drawHungryPill() {
   const el = $('#hungry-pill'); if (!el) return;
@@ -492,7 +548,7 @@ function stuCard(s, rc) {
   const badge = absent ? '<span class="ribbon absent">缺席</span>' : hw ? `<span class="ribbon hw-${hw}">${HW_LABEL[hw]}</span>` : '';
   return `<div class="${cls}" role="button" tabindex="0" data-act="stu" data-id="${s.id}"${rc ? ` data-r="${rc[0]}" data-c="${rc[1]}"` : ''} ${g ? `style="--gc:${esc(g.color)}"` : ''} aria-label="${esc(s.name)}，${s.score} 分">
     <span class="no">${s.number ?? ''}</span><span class="sc${s.score < 0 ? ' neg' : ''}">${s.score}</span>
-    ${hl && !absent ? hungerBubble(s) : ''}${avatar(s)}<span class="nm">${esc(s.name)}</span>${g ? '<span class="gbar"></span>' : ''}${badge}</div>`;
+    ${petBubble(s)}${avatar(s)}<span class="nm">${esc(s.name)}</span>${g ? '<span class="gbar"></span>' : ''}${badge}</div>`;
 }
 function drawRoomGrid() {
   const grid = $('#room-grid'); if (!grid) return;
@@ -593,7 +649,7 @@ async function markHw(id) {
   if (!room.hwId) return toast('請先選擇或新增功課', { error: true });
   const cur = room.hwMap.get(id); const status = cur === room.hwStatus ? null : room.hwStatus; // 再撳同一狀態 = 清除
   status ? room.hwMap.set(id, status) : room.hwMap.delete(id); drawQuickBar(); drawRoomGrid();
-  try { await PUT(`/homework/${room.hwId}/submissions`, { entries: [{ student_id: id, status }] }); }
+  try { await PUT(`/homework/${room.hwId}/submissions`, { entries: [{ student_id: id, status }] }); refreshMissing().catch(() => {}); }
   catch (e) { fail(e); await selectHomework(room.hwId); }
 }
 async function hwFill(kind) {
@@ -601,7 +657,7 @@ async function hwFill(kind) {
   if (!ids.length) return toast('沒有需要更新的學生');
   const status = kind === 'absent' ? 'excused' : 'missing';
   await PUT(`/homework/${room.hwId}/submissions`, { entries: ids.map(student_id => ({ student_id, status })) });
-  await selectHomework(room.hwId); toast(`已把 ${ids.length} 位學生設為「${HW_LABEL[status]}」`);
+  await selectHomework(room.hwId); await refreshMissing(); toast(`已把 ${ids.length} 位學生設為「${HW_LABEL[status]}」`);
 }
 function newHomeworkQuick() {
   const d = openDialog(`<div class="sheet-head"><h2>新增功課</h2><button class="btn ghost" data-close>✕</button></div>
@@ -1264,7 +1320,7 @@ async function renderStudent(id) {
       <button class="btn primary" data-act="give">加減分</button></div>
     <div class="profile">
       <section class="pet-card${hungerOf(s) ? ' hungry h' + hungerOf(s) : ''}">
-        ${pet ? hungerBubble(s, true) : ''}${avatar(s)}
+        ${pet ? hungerBubble(s, true) : ''}${pet && d.homework.some(h => h.status === 'missing') ? `<div class="speech hw">${esc(homeworkMessage(s, d.homework.filter(h => h.status === 'missing')))}<small>${d.homework.filter(h => h.status === 'missing').map(h => esc(h.title)).join('、')}</small></div>` : ''}${avatar(s)}
         ${pet ? `<h2>${esc(petLabel(pet))}${pet.nickname ? `「${esc(pet.nickname)}」` : ''}</h2>
           <div class="muted small">${esc(speciesByKey[pet.species_key].element)}屬性 · 派蛋於 ${fmtDate(pet.assigned_at)}${pet.hatched_at ? ` · 孵化於 ${fmtDate(pet.hatched_at)}` : ''}</div>
           <div style="display:flex;justify-content:space-between" class="small"><span>XP <b class="num">${pet.xp}</b></span><span>${p.next ? `再 ${p.remaining} XP ${pet.stage === 'egg' ? '孵化' : '成為' + STAGE_LABELS[p.next]}` : '已完全進化'}</span></div>

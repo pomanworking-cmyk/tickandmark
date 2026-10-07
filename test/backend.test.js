@@ -166,6 +166,9 @@ async function scenario(c) {
     const ex = await c.req('POST', `/classes/${classes['4A'].id}/exams`, { title: '上學期測驗', subject: '數學', full_mark: 100, exam_date: '2026-10-05' });
     await c.req('PUT', `/exams/${ex.id}/scores`, { scores: [{ student_id: S['4A'][0].id, score: 88 }, { student_id: S['4A'][1].id, score: 72.5 }] });
     await assert.rejects(c.req('PUT', `/exams/${ex.id}/scores`, { scores: [{ student_id: S['4A'][0].id, score: 120 }] }), /0 至 100/);
+    const miss = await c.req('GET', `/classes/${classes['4A'].id}/missing-homework`);
+    assert.deepEqual(miss.map(m => [m.student_id, m.title]), [[S['4A'][1].id, '中文作文']], '欠交功課清單');
+    L('missing', miss);
     const exl = await c.req('GET', `/classes/${classes['4A'].id}/exams`);
     assert.equal(exl[0].avg, 80.25);
 

@@ -399,6 +399,13 @@ export function createDemoBackend(initial) {
       return { ...clone(h), submitted: n('submitted'), late: n('late'), missing: n('missing'), excused: n('excused') };
     });
   });
+  on('GET', '/classes/:id/missing-homework', ({ tid, p }) => {
+    const c = own('classes', p.id, tid);
+    return S.homework_submissions.filter(x => x.status === 'missing').map(x => ({ x, h: S.homework.find(h => h.id === x.homework_id) }))
+      .filter(({ h }) => h && h.class_id === c.id)
+      .sort((a, b) => (a.h.due_date < b.h.due_date ? -1 : a.h.due_date > b.h.due_date ? 1 : 0) || a.h.id - b.h.id || a.x.student_id - b.x.student_id)
+      .map(({ x, h }) => ({ student_id: x.student_id, homework_id: h.id, title: h.title, subject: h.subject, due_date: h.due_date }));
+  });
   on('POST', '/classes/:id/homework', ({ tid, p, body }) => { const c = own('classes', p.id, tid); const title = str(body.title, 60); if (!title) throw bad('請輸入功課名稱'); return clone(insert('homework', { teacher_id: tid, class_id: c.id, title, subject: str(body.subject, 20), due_date: str(body.due_date, 10) })); });
   on('DELETE', '/homework/:id', ({ tid, p }) => { own('homework', p.id, tid); S.homework = S.homework.filter(h => h.id !== p.id); S.homework_submissions = S.homework_submissions.filter(x => x.homework_id !== p.id); return { ok: true }; });
   on('GET', '/homework/:id/submissions', ({ tid, p }) => { const h = own('homework', p.id, tid); return { homework: clone(h), entries: clone(S.homework_submissions.filter(x => x.homework_id === h.id)) }; });
