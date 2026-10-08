@@ -424,3 +424,40 @@ test('Netlify Function：登入、Cookie、防 CSRF、加分及管理員', async
     assert.equal((await call('B', 'GET', '/classes')).status, 401);
   } finally { mock.close(); }
 });
+
+test('批量刪除學生：連同紀錄一併刪除；其他老師及其他班別不能刪', async () => {
+  const { openSqlite } = await import('../server/db-sqlite.js');
+  const { createApp } = await import('../server/app.js');
+  const db = openSqlite(':memory:');
+  const app = createApp({ db, allowRegistration: true });
+  let cookie = '';
+  const call = async (method, path, body, ck = cookie) => {
+    const r = await app({ method, path, query: {}, headers: { 'x-tm': '1', cookie: ck }, bodyText: body ? JSON.stringify(body) : '', ip: '1' });
+    const sc = r.headers['Set-Cookie']; if (sc && ck === cookie) cookie = sc.split(';')[0];
+    if (r.status >= 400) { const e = new Error(r.body.error); e.status = r.status; throw e; }
+    return r.body;
+  };
+  await call('POST', '/auth/register', { email: 'a@x.hk', name: 'A', password: 'Password123' });
+  const c1 = await call('POST', '/classes', { name: '1A' }); const c2 = await call('POST', '/classes', { name: '1B' });
+  const { created } = await call('POST', `/classes/${c1.id}/students`, { students: [1, 2, 3, 4].map(n => ({ number: n, name: `S${n}`, score: 3 })) });
+  const other = (await call('POST', `/classes/${c2.id}/students`, { students: [{ name: 'X' }] })).created[0];
+  await call('POST', '/pets/assign', { student_ids: created.map(s => s.id), species_key: 'fire_fox' });
+  await call('POST', '/points', { class_id: c1.id, student_ids: created.map(s => s.id), delta: 2, client_batch_id: 'b1' });
+  const hw = await call('POST', `/classes/${c1.id}/homework`, { title: 'HW' });
+  await call('PUT', `/homework/${hw.id}/submissions`, { entries: created.map(s => ({ student_id: s.id, status: 'missing' })) });
+  await assert.rejects(call('POST', `/classes/${c1.id}/students/delete`, { student_ids: [created[0].id, other.id] }), e => e.status === 400);
+  const r = await call('POST', `/classes/${c1.id}/students/delete`, { student_ids: [created[0].id, created[1].id] });
+  assert.equal(r.deleted, 2);
+  const full = await call('GET', `/classes/${c1.id}/full`);
+  assert.deepEqual(full.students.map(s => s.name), ['S3', 'S4']);
+  for (const t of ['score_events', 'student_pets', 'homework_submissions']) {
+    const col = t === 'student_pets' ? 'student_record_id' : 'student_id';
+    assert.equal((await db.get(`SELECT COUNT(*) n FROM ${t} WHERE ${col} IN (?,?)`, created[0].id, created[1].id)).n, 0, t);
+  }
+  assert.equal((await db.get('SELECT COUNT(*) n FROM pet_xp_ledger l LEFT JOIN student_pets p ON p.id = l.pet_id WHERE p.id IS NULL')).n, 0);
+  // 另一位老師不能刪
+  const ck2 = (await app({ method: 'POST', path: '/auth/register', query: {}, headers: { 'x-tm': '1' }, bodyText: JSON.stringify({ email: 'b@x.hk', name: 'B', password: 'Password123' }), ip: '2' })).headers['Set-Cookie'].split(';')[0];
+  const r2 = await app({ method: 'POST', path: `/classes/${c1.id}/students/delete`, query: {}, headers: { 'x-tm': '1', cookie: ck2 }, bodyText: JSON.stringify({ student_ids: [created[2].id] }), ip: '2' });
+  assert.equal(r2.status, 404);
+  const audit = await call('GET', '/audit'); assert.ok(audit.ok !== false);
+});

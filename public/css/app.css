@@ -619,3 +619,6 @@ body.loading::after { content: ''; position: fixed; top: 0; left: 0; height: 3px
 body:has(.selbar) .toasts { bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
 /* 課室最底留位，免得多選列遮住最後一行學生 */
 #room-grid { padding-bottom: 80px; }
+
+/* 學生名單：姓名、標題唔好逐個字斷行（窄螢幕可左右捲動表格） */
+.stu-table th, .stu-table td:nth-child(4), .stu-table td:nth-child(7) { white-space: nowrap; }

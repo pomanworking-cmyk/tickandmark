@@ -321,8 +321,26 @@ export function createApi(db) {
     (await db.run('UPDATE students SET name = ?, number = ?, group_id = ? WHERE id = ?', name, number, group, s.id));
     return await studentFull(s.id);
   });
+  // 刪除學生及其所有紀錄。逐個表明確刪除，即使資料庫未開啟外鍵連鎖刪除亦不會留下孤兒紀錄
+  const deleteStudents = (ids) => {
+    const L = inList(ids);
+    return db.tx(() => db.batch([
+      [`DELETE FROM pet_xp_ledger WHERE pet_id IN (SELECT id FROM student_pets WHERE student_record_id IN (${L}))`, ...ids],
+      [`DELETE FROM pet_xp_ledger WHERE score_event_id IN (SELECT id FROM score_events WHERE student_id IN (${L}))`, ...ids],
+      ...['student_pets:student_record_id', 'score_events:student_id', 'homework_submissions:student_id', 'exam_scores:student_id', 'attendance:student_id', 'redemptions:student_id', 'students:id']
+        .map(x => { const [t, c] = x.split(':'); return [`DELETE FROM ${t} WHERE ${c} IN (${L})`, ...ids]; })]));
+  };
   on('DELETE', '/students/:id', async ({ tid, p }) => {
-    await own('students', p.id, tid); (await db.run('DELETE FROM students WHERE id = ?', p.id)); return { ok: true };
+    await own('students', p.id, tid); await deleteStudents([p.id]); return { ok: true };
+  });
+  // 批量刪除學生（分數紀錄、功課、成績、寵物一併刪除）
+  on('POST', '/classes/:id/students/delete', async ({ tid, p, body }) => {
+    const c = await own('classes', p.id, tid);
+    const ids = [...new Set((body.student_ids || []).map(int))];
+    if (!ids.length) throw bad('請選擇學生');
+    await ownStudents(ids, tid, c.id);
+    await deleteStudents(ids);
+    return { deleted: ids.length };
   });
 
   // ---------- 小組 ----------

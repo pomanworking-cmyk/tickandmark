@@ -985,9 +985,12 @@ function openTimer() {
 }
 
 // ---------- 學生及分組 ----------
+const stuSel = { classId: null, ids: new Set() }; // 學生名單的批量選擇
 function renderStudents() {
   if (!here('students')) return;
   const list = students(); const groups = state.cls.groups;
+  if (stuSel.classId !== state.classId) { stuSel.classId = state.classId; stuSel.ids.clear(); }
+  for (const id of [...stuSel.ids]) if (!list.some(s => s.id === id)) stuSel.ids.delete(id);
   const rows = state.importRows;
   const existing = new Set(list.map(s => s.name));
   shell('students', `
@@ -1024,9 +1027,11 @@ function renderStudents() {
       </section>
     </div>
     <section class="panel" style="margin-top:14px">
-      <h2>學生名單</h2>
-      ${list.length ? `<div class="table-wrap"><table><thead><tr><th class="num">班號</th><th></th><th>姓名</th><th>小組</th><th class="num">分數</th><th>寵物</th><th></th></tr></thead><tbody>
-      ${list.map(s => `<tr><td class="num">${s.number ?? ''}</td><td>${avatar(s, 44)}</td><td><a href="#/s/${s.id}">${esc(s.name)}</a></td>
+      <div class="row" style="align-items:center;margin-bottom:8px"><h2 style="margin:0 auto 0 0">學生名單</h2>
+        ${list.length ? `<span class="muted small" id="ssel-count">已選 ${stuSel.ids.size} 位</span>
+        <button class="btn sm danger" data-act="delsel" id="ssel-del"${stuSel.ids.size ? '' : ' disabled'}>🗑 刪除已選</button>` : ''}</div>
+      ${list.length ? `<div class="table-wrap"><table class="stu-table"><thead><tr><th><input type="checkbox" id="ssel-all" aria-label="全選"${stuSel.ids.size && stuSel.ids.size === list.length ? ' checked' : ''}></th><th class="num">班號</th><th></th><th>姓名</th><th>小組</th><th class="num">分數</th><th>寵物</th><th></th></tr></thead><tbody>
+      ${list.map(s => `<tr><td><input type="checkbox" data-ssel="${s.id}" aria-label="選擇 ${esc(s.name)}"${stuSel.ids.has(s.id) ? ' checked' : ''}></td><td class="num">${s.number ?? ''}</td><td>${avatar(s, 44)}</td><td><a href="#/s/${s.id}">${esc(s.name)}</a></td>
         <td><select class="input" style="width:auto;min-height:34px" data-sgroup="${s.id}" aria-label="小組"><option value="">—</option>${groups.map(g => `<option value="${g.id}"${g.id === s.group_id ? ' selected' : ''}>${esc(g.name)}</option>`).join('')}</select></td>
         <td class="num">${s.score}</td><td class="small">${esc(petLabel(s.pet))}</td>
         <td style="white-space:nowrap"><button class="btn sm" data-act="editstu" data-id="${s.id}">編輯</button> <button class="btn sm danger" data-act="delstu" data-id="${s.id}">刪除</button></td></tr>`).join('')}
@@ -1055,7 +1060,18 @@ function renderStudents() {
   drop.addEventListener('dragleave', () => drop.classList.remove('over'));
   drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); handleFile(e.dataTransfer.files[0]); });
   app.oninput = (e) => { const i = e.target.dataset.imp; if (i !== undefined) state.importRows[i][e.target.dataset.k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value; };
+  const syncSel = () => {
+    const n = stuSel.ids.size; const c = $('#ssel-count'); if (c) c.textContent = `已選 ${n} 位`;
+    const b = $('#ssel-del'); if (b) b.disabled = !n;
+    const all = $('#ssel-all'); if (all) { all.checked = n > 0 && n === list.length; all.indeterminate = n > 0 && n < list.length; }
+  };
+  syncSel();
   app.onchange = async (e) => {
+    if (e.target.id === 'ssel-all') {
+      if (e.target.checked) list.forEach(s => stuSel.ids.add(s.id)); else stuSel.ids.clear();
+      document.querySelectorAll('[data-ssel]').forEach(cb => { cb.checked = e.target.checked; }); syncSel(); return;
+    }
+    if (e.target.dataset.ssel) { const id = Number(e.target.dataset.ssel); e.target.checked ? stuSel.ids.add(id) : stuSel.ids.delete(id); syncSel(); return; }
     try {
       if (e.target.dataset.sgroup) { await PATCH(`/students/${e.target.dataset.sgroup}`, { group_id: e.target.value ? Number(e.target.value) : null }); await reloadClass(); toast('已更新小組'); }
       if (e.target.dataset.gcolor) { await PATCH(`/groups/${e.target.dataset.gcolor}`, { color: e.target.value }); await reloadClass(); }
@@ -1080,6 +1096,14 @@ function renderStudents() {
       <form class="stack" data-f><label class="field"><span>班號</span><input class="input num" id="es-no" name="number" type="number" value="${s.number ?? ''}"></label>
       <label class="field"><span>姓名</span><input class="input" id="es-name" name="name" required maxlength="40" value="${esc(s.name)}"></label><button class="btn primary">儲存</button></form>`);
     d.querySelector('[data-f]').onsubmit = async (e) => { e.preventDefault(); try { await PATCH(`/students/${s.id}`, Object.fromEntries(new FormData(e.target))); d.close(); await reloadClass(); renderStudents(); } catch (err) { fail(err); } };
+  };
+  ACT.delsel = async () => {
+    const ids = [...stuSel.ids]; if (!ids.length) return;
+    const names = list.filter(s => stuSel.ids.has(s.id)).map(s => s.name);
+    const preview = names.slice(0, 8).join('、') + (names.length > 8 ? ` 等 ${names.length} 位` : '');
+    if (!(await confirmBox(`刪除 ${ids.length} 位學生（${preview}）？佢哋嘅分數紀錄、功課、成績及寵物會一併刪除，不能復原。`, { ok: `刪除 ${ids.length} 位`, danger: true }))) return;
+    await POST(`/classes/${state.classId}/students/delete`, { student_ids: ids });
+    stuSel.ids.clear(); await reloadClass(); await reloadBoot(); toast(`已刪除 ${ids.length} 位學生`); renderStudents();
   };
   ACT.delstu = async (el) => {
     const s = list.find(x => x.id === Number(el.dataset.id));

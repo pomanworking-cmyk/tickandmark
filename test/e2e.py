@@ -447,6 +447,18 @@ try:
             m.screenshot(path=f'{OUT}/room-{name}.png')
             m.goto(BASE + f"#/s/{bear['id']}"); m.wait_for_selector('.pet-card'); m.screenshot(path=f'{OUT}/student-{name}.png', full_page=True)
 
+        # 批量刪除學生
+        goto(page, BASE + f"#/c/{ids['6C']}/students"); page.wait_for_selector('[data-ssel]')
+        before = page.locator('[data-ssel]').count()
+        page.locator('[data-ssel]').nth(0).check(); page.locator('[data-ssel]').nth(1).check()
+        check('批量刪除：顯示已選 2 位', page.inner_text('#ssel-count') == '已選 2 位' and page.is_enabled('#ssel-del'))
+        page.click('#ssel-del'); page.click('dialog button:has-text("刪除 2 位")'); page.wait_for_selector('text=已刪除 2 位學生')
+        wait_js(page, f"document.querySelectorAll('[data-ssel]').length === {before - 2}")
+        left = api(page, 'GET', f"/classes/{ids['6C']}/full")['students']
+        check('批量刪除：資料庫只剩其餘學生', len(left) == before - 2, str(len(left)))
+        page.check('#ssel-all'); check('全選', page.inner_text('#ssel-count') == f'已選 {before - 2} 位')
+        page.uncheck('#ssel-all')
+
         # 私隱：另一位老師
         other = br.new_context().new_page(); other.goto(BASE)
         other.evaluate("fetch('/api/auth/register', { method: 'POST', headers: { 'content-type': 'application/json', 'x-tm': '1' }, body: JSON.stringify({ email: 'lee@school.edu.hk', name: '李老師', password: 'Password123' }) })")

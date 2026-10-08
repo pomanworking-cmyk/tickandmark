@@ -239,13 +239,23 @@ export function createDemoBackend(initial) {
     if (body.group_id !== undefined) { group = body.group_id ? own('groups', int(body.group_id), tid).id : null; if (group && S.groups.find(g => g.id === group).class_id !== s.class_id) throw bad('小組不屬於此班'); }
     Object.assign(s, { name, number, group_id: group }); return studentFull(s.id);
   });
-  on('DELETE', '/students/:id', ({ tid, p }) => {
-    own('students', p.id, tid); S.students = S.students.filter(s => s.id !== p.id);
-    const pet = S.student_pets.find(x => x.student_record_id === p.id);
-    S.student_pets = S.student_pets.filter(x => x !== pet); S.score_events = S.score_events.filter(e => e.student_id !== p.id);
-    S.redemptions = S.redemptions.filter(r => r.student_id !== p.id); S.attendance = S.attendance.filter(a => a.student_id !== p.id);
+  const removeStudent = (id) => {
+    S.students = S.students.filter(s => s.id !== id);
+    const pet = S.student_pets.find(x => x.student_record_id === id);
+    S.student_pets = S.student_pets.filter(x => x !== pet); S.score_events = S.score_events.filter(e => e.student_id !== id);
+    S.redemptions = S.redemptions.filter(r => r.student_id !== id); S.attendance = S.attendance.filter(a => a.student_id !== id);
+    if (S.homework_submissions) S.homework_submissions = S.homework_submissions.filter(x => x.student_id !== id);
+    if (S.exam_scores) S.exam_scores = S.exam_scores.filter(x => x.student_id !== id);
     if (pet) S.pet_xp_ledger = S.pet_xp_ledger.filter(l => l.pet_id !== pet.id);
-    return { ok: true };
+  };
+  on('DELETE', '/students/:id', ({ tid, p }) => { own('students', p.id, tid); removeStudent(p.id); return { ok: true }; });
+  on('POST', '/classes/:id/students/delete', ({ tid, p, body }) => {
+    const c = own('classes', p.id, tid);
+    const ids = [...new Set((body.student_ids || []).map(Number))];
+    if (!ids.length) throw bad('請選擇學生');
+    for (const id of ids) { const s = own('students', id, tid); if (s.class_id !== c.id) throw bad('學生不屬於此班'); }
+    ids.forEach(removeStudent);
+    return { deleted: ids.length };
   });
 
   on('POST', '/classes/:id/groups', ({ tid, p, body }) => { const c = own('classes', p.id, tid); const name = str(body.name, 20); if (!name) throw bad('請輸入小組名稱'); return clone(insert('groups', { teacher_id: tid, class_id: c.id, name, color: str(body.color, 9) || '#8cc4f5' })); });
