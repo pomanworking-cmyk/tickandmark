@@ -20,19 +20,27 @@ export async function api(method, path, body) {
     try { return await be.request(method, path, body); }
     catch (e) { const err = new Error(e.message); err.status = e.status || 500; throw err; }
   }
-  let res;
-  try {
-    res = await fetch('/api' + path, {
-      method, credentials: 'same-origin',
-      headers: { 'content-type': 'application/json', 'x-tm': '1' },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-  } catch {
-    const err = new Error('網絡連線中斷，請檢查網絡後再試'); err.status = 0; throw err;
+  // 讀取，以及帶 client_batch_id 的加分（伺服器會防重複）可以安全地自動重試一次
+  const safe = method === 'GET' || (path === '/points' && body?.client_batch_id);
+  for (let attempt = 0; ; attempt++) {
+    let res;
+    try {
+      res = await fetch('/api' + path, {
+        method, credentials: 'same-origin',
+        headers: { 'content-type': 'application/json', 'x-tm': '1' },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch {
+      if (safe && attempt === 0) { await new Promise(r => setTimeout(r, 600)); continue; }
+      const err = new Error('網絡連線中斷，請檢查網絡後再試'); err.status = 0; throw err;
+    }
+    if (safe && attempt === 0 && [502, 503, 504].includes(res.status)) { await new Promise(r => setTimeout(r, 600)); continue; }
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      const err = new Error(data?.error || (res.status >= 500 ? '伺服器暫時未能回應，請稍後再試' : '發生錯誤')); err.status = res.status; throw err;
+    }
+    return data ?? {};
   }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) { const err = new Error(data.error || '發生錯誤'); err.status = res.status; throw err; }
-  return data;
 }
 
 export const GET = (p) => api('GET', p);

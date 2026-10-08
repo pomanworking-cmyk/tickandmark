@@ -7,8 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export async function startTursoMock({ token = 'test-token' } = {}) {
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'turso-')), 'db.sqlite');
+export async function startTursoMock({ token = 'test-token', latency = 0, file = null } = {}) {
+  file ||= path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'turso-')), 'db.sqlite');
   const streams = new Map(); // baton -> connection
   const stats = { requests: 0, statements: 0 };
   const open = () => { const c = new DatabaseSync(file); c.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;'); return c; };
@@ -54,8 +54,8 @@ export async function startTursoMock({ token = 'test-token' } = {}) {
       let newBaton = null;
       if (closed) { try { if (conn.isTransaction) conn.exec('ROLLBACK'); } catch { /* */ } conn.close(); }
       else { newBaton = crypto.randomBytes(8).toString('hex'); streams.set(newBaton, conn); }
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ baton: newBaton, base_url: null, results }));
+      const out = JSON.stringify({ baton: newBaton, base_url: null, results });
+      setTimeout(() => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(out); }, latency);
     });
   });
   await new Promise(r => server.listen(0, '127.0.0.1', r));

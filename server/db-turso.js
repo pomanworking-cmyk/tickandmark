@@ -36,28 +36,35 @@ export function openTurso({ url, authToken, fetchImpl = globalThis.fetch }) {
     if (stream) { stream.baton = body.baton ?? null; if (body.base_url) stream.baseUrl = body.base_url; }
     return body.results;
   }
-  async function execute(sql, args) {
-    const stmt = { sql, args: args.map(enc), want_rows: true };
-    const results = txStream
-      ? await pipeline([{ type: 'execute', stmt }], txStream)
-      : await pipeline([{ type: 'execute', stmt }, { type: 'close' }]);
-    const r = results[0];
-    if (!r || r.type === 'error') {
-      const e = new Error(r?.error?.message || '資料庫錯誤'); e.code = r?.error?.code; throw e;
-    }
-    const res = r.response.result;
-    const names = res.cols.map(c => c.name);
+  const toResult = (r) => {
+    if (!r || r.type === 'error') { const e = new Error(r?.error?.message || '資料庫錯誤'); e.code = r?.error?.code; throw e; }
+    const res = r.response.result; const names = res.cols.map(c => c.name);
     return {
       rows: res.rows.map(row => Object.fromEntries(row.map((v, i) => [names[i], dec(v)]))),
       changes: Number(res.affected_row_count || 0),
       lastInsertRowid: res.last_insert_rowid == null ? null : Number(res.last_insert_rowid),
     };
+  };
+  // 多句語句一次 HTTP 請求送出（交易中沿用同一串流）；任何一句出錯即拋出錯誤
+  async function batch(stmts) {
+    if (!stmts.length) return [];
+    const reqs = stmts.map(([sql, ...args]) => ({ type: 'execute', stmt: { sql, args: args.map(enc), want_rows: true } }));
+    const results = txStream ? await pipeline(reqs, txStream) : await pipeline([...reqs, { type: 'close' }]);
+    return stmts.map((_, i) => toResult(results[i]));
+  }
+  async function execute(sql, args) {
+    const stmt = { sql, args: args.map(enc), want_rows: true };
+    const results = txStream
+      ? await pipeline([{ type: 'execute', stmt }], txStream)
+      : await pipeline([{ type: 'execute', stmt }, { type: 'close' }]);
+    return toResult(results[0]);
   }
   return {
     kind: 'turso',
     async get(sql, ...args) { return (await execute(sql, args)).rows[0]; },
     async all(sql, ...args) { return (await execute(sql, args)).rows; },
     async run(sql, ...args) { const r = await execute(sql, args); return { changes: r.changes, lastInsertRowid: r.lastInsertRowid }; },
+    batch,
     // 多句不需回傳結果的語句，一次 HTTP 請求送出（用於建立資料表，減少冷啟動時間）
     async execMany(sqls) {
       const results = await pipeline([...sqls.map(sql => ({ type: 'execute', stmt: { sql, want_rows: false } })), { type: 'close' }]);
@@ -67,18 +74,21 @@ export function openTurso({ url, authToken, fetchImpl = globalThis.fetch }) {
       if (txStream) return fn();
       txStream = { baton: null, baseUrl: null };
       const stream = txStream;
+      let result;
       try {
         await execute('BEGIN IMMEDIATE', []);
-        const result = await fn();
-        await execute('COMMIT', []);
-        return result;
+        result = await fn();
       } catch (e) {
-        try { await execute('ROLLBACK', []); } catch { /* 連線已斷，伺服器會自動回滾 */ }
-        throw e;
-      } finally {
         txStream = null;
-        try { await pipeline([{ type: 'close' }], stream); } catch { /* 忽略 */ }
+        // 回滾並關閉串流（一次請求）；連線已斷的話伺服器亦會自動回滾
+        try { await pipeline([{ type: 'execute', stmt: { sql: 'ROLLBACK' } }, { type: 'close' }], stream); } catch { /* 忽略 */ }
+        throw e;
       }
+      txStream = null;
+      // 確認交易並關閉串流（一次請求）
+      const [commit] = await pipeline([{ type: 'execute', stmt: { sql: 'COMMIT' } }, { type: 'close' }], stream);
+      toResult(commit);
+      return result;
     },
   };
 }

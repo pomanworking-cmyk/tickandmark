@@ -43,7 +43,7 @@ function shell(active, body, { wide = false } = {}) {
     ${IS_DEMO ? '<div class="demo-banner">預覽示範：所有學生均為虛構，資料只存在此頁面，重新整理後會還原。</div>' : ''}
     <header class="topbar">
       <div class="topbar-row">
-        <a class="brand" href="#/classes"><span class="brand-mark">${ICON.tick}</span><span>Tick and Mark</span></a>
+        <a class="brand" href="#/classes"><span class="brand-mark">${ICON.tick}</span><span class="brand-text">Tick and Mark</span></a>
         ${c ? `<select class="input class-switch" id="class-switch" aria-label="切換班別">${classes.map(x => `<option value="${x.id}"${x.id === c.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : ''}
         <span class="spacer"></span>
         ${state.teacher?.is_admin ? '<a class="btn ghost sm" href="#/admin">🛡️ 管理</a>' : ''}
@@ -59,8 +59,14 @@ function shell(active, body, { wide = false } = {}) {
 // ---------- 路由 ----------
 let navSeq = 0; // 防止較慢的舊頁面在新頁面之後才畫出來
 async function route() {
-  ACT = {}; app.onclick = app.oninput = app.onchange = null;
   const my = ++navSeq;
+  // 載入新頁面期間，舊頁面變淡並暫停操作，免得老師撳咗冇反應
+  const slow = setTimeout(() => { if (my === navSeq) document.body.classList.add('loading'); }, 150);
+  document.body.dataset.route = 'busy';
+  try { await routeInner(my); } finally { clearTimeout(slow); if (my === navSeq) { document.body.classList.remove('loading'); document.body.dataset.route = 'idle'; } }
+}
+async function routeInner(my) {
+  ACT = {}; app.onclick = app.oninput = app.onchange = null;
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   try {
     if (!state.teacher) {
@@ -76,11 +82,11 @@ async function route() {
       store.set('lastClass', id);
       if (v === 'room') { await loadRoomExtras(); if (my !== navSeq) return; }
       const views = { room: renderRoom, students: renderStudents, homework: renderHomework, exams: renderExams, history: renderHistory, pets: renderPets, poster: renderPoster };
-      return (views[v] || renderRoom)(parts[3] ? Number(parts[3]) : null);
+      return await (views[v] || renderRoom)(parts[3] ? Number(parts[3]) : null);
     }
-    if (parts[0] === 's') return renderStudent(Number(parts[1]));
+    if (parts[0] === 's') return await renderStudent(Number(parts[1]));
     if (parts[0] === 'settings') return renderSettings();
-    if (parts[0] === 'admin') return renderAdmin();
+    if (parts[0] === 'admin') return await renderAdmin();
     return renderHome();
   } catch (e) {
     if (e.status === 404 && parts[0] === 'c') { state.classId = null; state.cls = null; toast(e.message, { error: true }); return go('#/classes'); }
@@ -131,7 +137,17 @@ function petBubble(s) {
   if (hw) return `<span class="hungry-bubble hw">${hwText}</span>`;
   return lv ? hungerBubble(s) : '';
 }
-async function reloadClass() { state.cls = await GET(`/classes/${state.classId}/full`); }
+// 操作完成時老師可能已轉咗頁／轉咗班：只更新仍然是同一班的資料，亦唔好畫返舊頁面
+async function reloadClass() { const id = state.classId; if (!id) return; const full = await GET(`/classes/${id}/full`); if (state.classId === id) state.cls = full; }
+const hashParts = () => location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+const CLASS_VIEWS = ['room', 'students', 'homework', 'exams', 'history', 'pets', 'poster'];
+function here(view, id) {
+  const p = hashParts();
+  if (CLASS_VIEWS.includes(view)) return p[0] === 'c' && Number(p[1]) === state.classId && !!state.cls && (p[2] || 'room') === view;
+  if (view === 'student') return p[0] === 's' && Number(p[1]) === id;
+  if (view === 'settings' || view === 'admin') return p[0] === view;
+  return !['c', 's', 'settings', 'admin'].includes(p[0]);
+}
 async function reloadBoot() { state.boot = await GET('/bootstrap'); }
 
 // ---------- 登入 ----------
@@ -167,6 +183,7 @@ function renderLogin() {
 
 // ---------- 班別首頁 ----------
 function renderHome() {
+  if (!here('home')) return;
   state.cls = null; state.classId = null;
   const cs = state.boot.classes;
   shell(null, `
@@ -324,6 +341,7 @@ function drawGroupRow() {
   }).join('');
 }
 function renderRoom() {
+  if (!here('room')) return;
   shell('room', `
     <div class="room-tools">
       <label class="search">${ICON.search}<input id="room-search" type="search" placeholder="班號或姓名，Enter 加分" autocomplete="off" value="${esc(room.q)}" aria-label="搜尋學生"></label>
@@ -968,6 +986,7 @@ function openTimer() {
 
 // ---------- 學生及分組 ----------
 function renderStudents() {
+  if (!here('students')) return;
   const list = students(); const groups = state.cls.groups;
   const rows = state.importRows;
   const existing = new Set(list.map(s => s.name));
@@ -1082,7 +1101,8 @@ function tplChips() {
 const HW_STATUS = [['submitted', '已交'], ['late', '遲交'], ['missing', '欠交'], ['excused', '豁免']];
 async function renderHomework(hid) {
   if (hid) return renderHomeworkDetail(hid);
-  const t = navSeq; const list = await GET(`/classes/${state.classId}/homework`); if (t !== navSeq) return;
+  if (!here('homework')) return;
+  const t = navSeq; const list = await GET(`/classes/${state.classId}/homework`); if (t !== navSeq || !here('homework')) return;
   const n = students().length;
   shell('homework', `
     <div class="page-head"><h1>功課及提交紀錄</h1></div>
@@ -1123,9 +1143,11 @@ async function renderHomework(hid) {
   };
 }
 async function renderHomeworkDetail(hid) {
-  const t = navSeq; const { homework: h, entries } = await GET(`/homework/${hid}/submissions`); if (t !== navSeq) return;
+  if (!here('homework')) return;
+  const t = navSeq; const { homework: h, entries } = await GET(`/homework/${hid}/submissions`); if (t !== navSeq || !here('homework')) return;
   const st = new Map(entries.map(e => [e.student_id, e.status]));
   const draw = () => {
+    if (!here('homework')) return;
     shell('homework', `
       <div class="page-head"><a class="btn ghost sm" href="#/c/${state.classId}/homework">← 功課</a><h1>${esc(h.title)}</h1>
         <span class="muted">${esc(h.subject)} · 限期 ${h.due_date ? fmtDate(h.due_date) : '未定'}</span>
@@ -1138,13 +1160,18 @@ async function renderHomeworkDetail(hid) {
   draw();
   app.onclick = async (e) => {
     const b = e.target.closest('[data-hw]'); if (!b) return;
-    const sid = Number(b.dataset.hw); const v = st.get(sid) === b.dataset.v ? null : b.dataset.v;
-    try { await PUT(`/homework/${h.id}/submissions`, { entries: [{ student_id: sid, status: v }] }); v ? st.set(sid, v) : st.delete(sid); draw(); } catch (err) { fail(err); }
+    // 即時更新畫面，再在背景儲存；失敗就還原
+    const sid = Number(b.dataset.hw); const prev = st.get(sid); const v = prev === b.dataset.v ? null : b.dataset.v;
+    v ? st.set(sid, v) : st.delete(sid); draw();
+    try { await PUT(`/homework/${h.id}/submissions`, { entries: [{ student_id: sid, status: v }] }); }
+    catch (err) { prev ? st.set(sid, prev) : st.delete(sid); draw(); fail(err); }
   };
   ACT.allsub = async () => {
     const entries2 = students().filter(s => !st.has(s.id)).map(s => ({ student_id: s.id, status: 'submitted' }));
     if (!entries2.length) return toast('全部已有紀錄');
-    await PUT(`/homework/${h.id}/submissions`, { entries: entries2 }); entries2.forEach(e => st.set(e.student_id, 'submitted')); draw();
+    entries2.forEach(e => st.set(e.student_id, 'submitted')); draw();
+    try { await PUT(`/homework/${h.id}/submissions`, { entries: entries2 }); toast(`已將 ${entries2.length} 位設為已交`); }
+    catch (err) { entries2.forEach(e => st.delete(e.student_id)); draw(); throw err; }
   };
   ACT.delhw = async () => { if (await confirmBox(`刪除「${h.title}」及所有提交紀錄？`, { ok: '刪除', danger: true })) { await DEL(`/homework/${h.id}`); app.onclick = null; go(`#/c/${state.classId}/homework`); } };
   window.addEventListener('hashchange', () => { app.onclick = null; }, { once: true });
@@ -1153,7 +1180,8 @@ async function renderHomeworkDetail(hid) {
 // ---------- 考試 ----------
 async function renderExams(eid) {
   if (eid) return renderExamDetail(eid);
-  const t = navSeq; const list = await GET(`/classes/${state.classId}/exams`); if (t !== navSeq) return;
+  if (!here('exams')) return;
+  const t = navSeq; const list = await GET(`/classes/${state.classId}/exams`); if (t !== navSeq || !here('exams')) return;
   const f1 = (v) => (v == null ? '—' : (Math.round(v * 10) / 10).toString());
   shell('exams', `
     <div class="page-head"><h1>考試成績</h1></div>
@@ -1169,7 +1197,8 @@ async function renderExams(eid) {
   ACT['submit:newex'] = async (_f, fd) => { const x = await POST(`/classes/${state.classId}/exams`, Object.fromEntries(fd)); go(`#/c/${state.classId}/exams/${x.id}`); };
 }
 async function renderExamDetail(eid) {
-  const t = navSeq; const { exam: x, scores } = await GET(`/exams/${eid}/scores`); if (t !== navSeq) return;
+  if (!here('exams')) return;
+  const t = navSeq; const { exam: x, scores } = await GET(`/exams/${eid}/scores`); if (t !== navSeq || !here('exams')) return;
   const m = new Map(scores.map(s => [s.student_id, s.score]));
   const vals = [...m.values()].filter(v => v != null);
   const bands = [0, 0, 0, 0, 0]; vals.forEach(v => { const p = v / x.full_mark; bands[p >= .9 ? 4 : p >= .75 ? 3 : p >= .6 ? 2 : p >= .5 ? 1 : 0]++; });
@@ -1197,7 +1226,8 @@ async function renderExamDetail(eid) {
 
 // ---------- 分數紀錄 ----------
 async function renderHistory() {
-  const t = navSeq; const [batches, events] = await Promise.all([GET(`/classes/${state.classId}/batches?limit=30`), GET(`/classes/${state.classId}/events`)]); if (t !== navSeq) return;
+  if (!here('history')) return;
+  const t = navSeq; const [batches, events] = await Promise.all([GET(`/classes/${state.classId}/batches?limit=30`), GET(`/classes/${state.classId}/events`)]); if (t !== navSeq || !here('history')) return;
   let who = ''; let kind = '';
   const draw = () => {
     const ev = events.filter(e => (!who || e.student_id === Number(who)) && (!kind || (kind === 'pos' ? e.delta > 0 : kind === 'neg' ? e.delta < 0 : e.kind === 'import')));
@@ -1226,6 +1256,7 @@ async function renderHistory() {
 
 // ---------- 寵物 ----------
 function renderPets() {
+  if (!here('pets')) return;
   const th = thresholds();
   const list = students(); const noPet = list.filter(s => !s.pet);
   let pick = 'balanced';
@@ -1260,6 +1291,7 @@ function renderPets() {
 
 // ---------- 海報 ----------
 async function renderPoster() {
+  if (!here('poster')) return;
   const opts = { period: store.get('pPeriod', 'week'), theme: store.get('pTheme', 'coral'), top: store.get('pTop', 10), title: store.get('pTitle', '本週之星') };
   const since = () => {
     if (opts.period === 'all') return '';
@@ -1268,9 +1300,10 @@ async function renderPoster() {
     return d.toISOString();
   };
   const draw = async () => {
-    const t = navSeq; const lb = await GET(`/classes/${state.classId}/leaderboard?since=${encodeURIComponent(since())}`); if (t !== navSeq) return;
+    const t = navSeq; const lb = await GET(`/classes/${state.classId}/leaderboard?since=${encodeURIComponent(since())}`); if (t !== navSeq || !here('poster')) return;
     const key = opts.period === 'all' ? 'score' : 'gained';
-    const ranked = lb.students.slice().sort((a, b) => b[key] - a[key] || (a.number ?? 99) - (b.number ?? 99));
+    // 只列出有分數的同學（零分唔上榜）
+    const ranked = lb.students.filter(s => s[key] > 0).sort((a, b) => b[key] - a[key] || (a.number ?? 99) - (b.number ?? 99));
     const top3 = ranked.slice(0, 3); const rest = ranked.slice(3, Math.max(3, opts.top));
     const periodText = { week: '本週', month: '本月', all: '全學期' }[opts.period];
     const today = new Date();
@@ -1291,6 +1324,7 @@ async function renderPoster() {
           <div class="eyebrow">${esc(state.cls.class.name)} · ${periodText}</div>
           <div class="title">${esc(opts.title)}</div>
           <div class="sub">${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日 · 多謝每位同學的努力！</div>
+          ${ranked.length ? '' : `<div class="poster-empty">${periodText}仲未有加分紀錄<br><small style="font-weight:600;opacity:.7">加分之後，同學就會出現喺呢度 ✨</small></div>`}
           <div class="podium">${[top3[1], top3[0], top3[2]].map((s, i) => s ? `<div class="p p${[2, 1, 3][i]}">${avatar(s)}
             <div class="base"><div class="rank">${[2, 1, 3][i]}</div><div class="pn">${esc(s.name)}</div><div class="pp">${s[key]} 分</div></div></div>` : '<div></div>').join('')}</div>
           ${rest.length ? `<div class="honor">${rest.map((s, i) => `<div><span class="r">${i + 4}</span>${avatar(s)}<span>${esc(s.name)}</span><span class="g">${s[key]}</span></div>`).join('')}</div>` : ''}
@@ -1298,6 +1332,7 @@ async function renderPoster() {
           <div class="foot">Tick and Mark · 每一分都是進步</div>
         </div></div></div>`);
     $('#po-period').value = opts.period; $('#po-top').value = String(opts.top); $('#po-theme').value = opts.theme;
+    fitPoster();
     $('#poster-opts').onchange = (e) => {
       const fd = new FormData(e.currentTarget);
       opts.period = fd.get('period'); opts.top = Number(fd.get('top')); opts.theme = fd.get('theme'); opts.title = String(fd.get('title') || '本週之星');
@@ -1308,10 +1343,19 @@ async function renderPoster() {
   ACT.print = () => window.print();
   await draw();
 }
+// 海報闊 794px（A4）：螢幕較窄時按比例縮細，免得要左右捲動
+function fitPoster() {
+  const wrap = $('.poster-wrap'); const p = $('#poster'); if (!wrap || !p) return;
+  const k = Math.min(1, wrap.clientWidth / 794);
+  p.style.transform = k < 1 ? `scale(${k})` : ''; p.style.margin = k < 1 ? '0' : '';
+  wrap.style.height = k < 1 ? `${Math.ceil(p.offsetHeight * k)}px` : '';
+}
+window.addEventListener('resize', () => fitPoster());
 
 // ---------- 學生資料頁 ----------
 async function renderStudent(id) {
-  const t = navSeq; const d = await GET(`/students/${id}`); if (t !== navSeq) return;
+  if (!here('student', id)) return;
+  const t = navSeq; const d = await GET(`/students/${id}`); if (t !== navSeq || !here('student', id)) return;
   const s = d.student; const th = d.thresholds; const pet = s.pet;
   if (state.classId !== d.class.id) { const full = await GET(`/classes/${d.class.id}/full`); if (t !== navSeq) return; state.cls = full; state.classId = d.class.id; }
   const p = pet && progressInfo(pet, th);
@@ -1367,7 +1411,7 @@ function ago(iso) {
 async function renderAdmin() {
   if (!state.teacher?.is_admin) return go('#/classes');
   state.cls = null; state.classId = null;
-  const t = navSeq; const { teachers } = await GET('/admin/teachers'); if (t !== navSeq) return;
+  const t = navSeq; const { teachers } = await GET('/admin/teachers'); if (t !== navSeq || !here('admin')) return;
   const weekAgo = Date.now() - 7 * 864e5;
   const active = teachers.filter(x => x.last_seen_at && Date.parse(x.last_seen_at) >= weekAgo).length;
   const sum = (k) => teachers.reduce((a, x) => a + (x[k] || 0), 0);
@@ -1396,6 +1440,7 @@ async function renderAdmin() {
 
 // ---------- 設定 ----------
 function renderSettings() {
+  if (!here('settings')) return;
   const th = thresholds(); const tags = state.boot.tags;
   shell(null, `
     <div class="page-head"><a class="btn ghost sm" href="#/classes">← 班別</a><h1>設定</h1><span class="muted">${esc(state.teacher.name)} · ${esc(state.teacher.email)}</span>

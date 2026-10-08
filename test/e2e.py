@@ -11,9 +11,13 @@ os.makedirs(OUT, exist_ok=True)
 PORT = 3917
 tmp = tempfile.mkdtemp()
 db = os.path.join(tmp, 'e2e.db')
-srv = subprocess.Popen(['node', '--disable-warning=ExperimentalWarning', 'server/server.js'], cwd=ROOT,
+if os.environ.get('SIM'):  # 模擬 Netlify + Turso：SIM=1 python3 test/e2e.py
+    srv = subprocess.Popen(['node', '--disable-warning=ExperimentalWarning', 'scripts/netlify-sim.mjs', str(PORT), os.environ.get('SIM_LATENCY', '15')], cwd=ROOT, env={**os.environ, 'SIM_DB': db})
+    time.sleep(2)
+else:
+    srv = subprocess.Popen(['node', '--disable-warning=ExperimentalWarning', 'server/server.js'], cwd=ROOT,
                        env={**os.environ, 'PORT': str(PORT), 'DB_FILE': db, 'ALLOW_REGISTRATION': 'true'}, )
-time.sleep(1.2)
+    time.sleep(1.2)
 BASE = f'http://127.0.0.1:{PORT}/'
 results = []
 def check(name, ok, detail=''):
@@ -40,6 +44,12 @@ def wait_js(page, expr, timeout=15):
         if page.evaluate(f"() => {expr}"): return
         time.sleep(0.1)
     raise TimeoutError(expr)
+
+def goto(pg, url):
+    # 等新頁面完全載入（轉頁期間舊頁面暫停操作）
+    if pg.url.startswith(BASE) and pg.url != url: pg.evaluate("document.body.dataset.route = 'busy'")
+    pg.goto(url)
+    wait_js(pg, "document.body.dataset.route === 'idle'", 30)
 
 def dom_avatars(page, selector):
     return page.eval_on_selector_all(selector, "els => els.map(e => ({ s: e.dataset.student, sp: e.dataset.species, st: e.dataset.stage, src: e.querySelector('img')?.getAttribute('src') || null }))")
@@ -81,22 +91,22 @@ try:
         ids = {}
         for cn, year in [('4A', '2026-27'), ('4B', '2026-27'), ('6C', '2026-27')]:
             page.fill('#nc-name', cn); page.click('button:has-text("建立")'); page.wait_for_selector('h1:has-text("學生及分組")')
-            ids[cn] = int(page.url.split('/c/')[1].split('/')[0]); page.goto(BASE + '#/classes'); page.wait_for_selector('text=新增班別')
+            ids[cn] = int(page.url.split('/c/')[1].split('/')[0]); goto(page, BASE + '#/classes'); page.wait_for_selector('text=新增班別')
 
         # Excel 匯入
-        page.goto(BASE + f"#/c/{ids['4A']}/students"); page.wait_for_selector('#imp-file', state='attached')
+        goto(page, BASE + f"#/c/{ids['4A']}/students"); page.wait_for_selector('#imp-file', state='attached')
         page.set_input_files('#imp-file', xlsx); page.wait_for_selector('text=確認匯入')
         check('Excel 讀到 12 位學生（含舊分數）', page.locator('[data-k=name]').count() == 12)
         page.screenshot(path=f'{OUT}/import-preview.png', full_page=True)
         page.click('text=確認匯入'); page.wait_for_selector('text=已匯入 12 位學生')
         # Big5 CSV 匯入
-        page.goto(BASE + f"#/c/{ids['4B']}/students"); page.wait_for_selector('#imp-file', state='attached')
+        goto(page, BASE + f"#/c/{ids['4B']}/students"); page.wait_for_selector('#imp-file', state='attached')
         page.set_input_files('#imp-file', csv); page.wait_for_selector('text=確認匯入')
         first = page.locator('[data-k=name]').first.input_value()
         check('Big5 CSV 正確解碼中文', first == names4b[0], first)
         page.click('text=確認匯入'); page.wait_for_selector('text=已匯入 10 位學生')
         # 貼上名單
-        page.goto(BASE + f"#/c/{ids['6C']}/students"); page.wait_for_selector('#imp-text', state='attached')
+        goto(page, BASE + f"#/c/{ids['6C']}/students"); page.wait_for_selector('#imp-text', state='attached')
         page.click('summary:has-text("貼上")'); page.fill('#imp-text', '1. 葉朗峰\n2 方采盈 8\n3、雷俊言\n4 姚樂怡\n5 歐陽子晴')
         page.click('text=讀取名單'); page.wait_for_selector('text=確認匯入')
         check('貼上名單讀到 5 位（含複姓）', page.locator('[data-k=name]').count() == 5)
@@ -110,10 +120,10 @@ try:
         api(page, 'POST', '/points', {'class_id': ids['4A'], 'student_ids': [pre_id], 'delta': 9, 'client_batch_id': 'pre-egg'})
 
         # 4A：經介面平均派蛋
-        page.goto(BASE + f"#/c/{ids['4A']}/pets"); page.wait_for_selector('text=派蛋給已選學生')
+        goto(page, BASE + f"#/c/{ids['4A']}/pets"); page.wait_for_selector('text=派蛋給已選學生')
         page.click('text=派蛋給已選學生'); page.wait_for_selector('text=已為 12 位學生派蛋')
         # 4B：經介面選土熊給首兩位，其餘平均
-        page.goto(BASE + f"#/c/{ids['4B']}/pets"); page.wait_for_selector('text=派蛋給已選學生')
+        goto(page, BASE + f"#/c/{ids['4B']}/pets"); page.wait_for_selector('text=派蛋給已選學生')
         page.click('text=全不選'); page.locator('[data-np]').nth(0).check(); page.locator('[data-np]').nth(1).check()
         page.click('[data-sp=earth_bear]'); page.click('text=派蛋給已選學生'); page.wait_for_selector('text=已為 2 位學生派蛋')
         page.click('text=派蛋給已選學生'); page.wait_for_selector('text=已為 8 位學生派蛋')
@@ -131,7 +141,7 @@ try:
         full4b = api(page, 'GET', f"/classes/{ids['4B']}/full")
         bear = full4b['students'][0]
         check('4B 第一位資料是土熊蛋', bear['pet']['species_key'] == 'earth_bear' and bear['pet']['stage'] == 'egg')
-        page.goto(BASE + f"#/c/{ids['4B']}/room"); page.wait_for_selector('.stu')
+        goto(page, BASE + f"#/c/{ids['4B']}/room"); page.wait_for_selector('.stu')
         verify_against_db(page, '4B 課室（派蛋後）', dom_avatars(page, '#room-grid .avatar'), {s['id']: s for s in full4b['students']})
         page.fill('#room-search', '1'); page.keyboard.press('Enter')  # 班號 1 + Enter
         page.wait_for_selector('dialog .tag-grid')
@@ -185,7 +195,7 @@ try:
         check('同一筆加分重送不會重複計算', r2.get('replayed') and r2['results'][0]['pet']['xp'] == r1['results'][0]['pet']['xp'] == 3)
 
         # 一撳即加：先揀「+2」，再撳學生，直接加分並彈出畫面
-        page.goto(BASE + f"#/c/{ids['4B']}/room"); page.wait_for_selector('.stu')
+        goto(page, BASE + f"#/c/{ids['4B']}/room"); page.wait_for_selector('.stu')
         page.click('.qchip[data-q="d:2"]')
         target = api(page, 'GET', f"/classes/{ids['4B']}/full")['students'][5]
         page.click(f'.stu[data-id="{target["id"]}"]')
@@ -242,7 +252,7 @@ try:
         page.screenshot(path=f'{OUT}/seat-chart.png', full_page=True)
 
         # ===== 課堂工具（4B）=====
-        page.goto(BASE + f"#/c/{ids['4B']}/room"); page.wait_for_selector('.stu')
+        goto(page, BASE + f"#/c/{ids['4B']}/room"); page.wait_for_selector('.stu')
         roster = api(page, 'GET', f"/classes/{ids['4B']}/full")['students']
         absent_ids = [roster[1]['id'], roster[4]['id']]
         # 1) 點名
@@ -300,9 +310,9 @@ try:
         check('加分彈窗：寵物提醒記得交功課', '中文作文' in page.inner_text('.celebrate .remind-line'), page.inner_text('.celebrate .remind-line'))
         page.screenshot(path=f'{OUT}/missing-remind.png')
         page.click('.celebrate .cele-card'); page.click('.qchip[data-q="menu"]')
-        page.goto(BASE + f"#/s/{pet_miss[1]}"); page.wait_for_selector('.pet-card .speech.hw')
+        goto(page, BASE + f"#/s/{pet_miss[1]}"); page.wait_for_selector('.pet-card .speech.hw')
         check('學生頁：寵物講出欠交功課', '中文作文' in page.inner_text('.pet-card .speech.hw'))
-        page.goto(BASE + f"#/c/{ids['4B']}/room"); wait_js(page, f"document.getElementById('class-switch')?.value === '{ids['4B']}' && !!document.querySelector('#room-grid .stu')")
+        goto(page, BASE + f"#/c/{ids['4B']}/room"); wait_js(page, f"document.getElementById('class-switch')?.value === '{ids['4B']}' && !!document.querySelector('#room-grid .stu')")
         # 4) 全班合作目標
         page.click('#goal-pill'); page.fill('#goal-title', '全班看電影'); page.fill('#goal-target', '10'); page.click('dialog button:has-text("開始")')
         page.wait_for_selector('#goal-pill.has')
@@ -348,25 +358,25 @@ try:
                 if n: api(page, 'POST', '/points', {'class_id': ids[cn], 'student_ids': [s['id']], 'delta': min(n, 100), 'client_batch_id': f'r-{s["id"]}'})
         for cn in ['4A', '4B', '6C']:
             f = api(page, 'GET', f"/classes/{ids[cn]}/full"); by = {s['id']: s for s in f['students']}
-            page.goto(BASE + f"#/c/{ids[cn]}/room"); wait_js(page, f"document.getElementById('class-switch')?.value === '{ids[cn]}' && !!document.querySelector('#room-grid .stu')")
+            goto(page, BASE + f"#/c/{ids[cn]}/room"); wait_js(page, f"document.getElementById('class-switch')?.value === '{ids[cn]}' && !!document.querySelector('#room-grid .stu')")
             verify_against_db(page, f'{cn} 課室模式', dom_avatars(page, '#room-grid .avatar'), by)
-            page.goto(BASE + f"#/c/{ids[cn]}/pets"); wait_js(page, f"document.getElementById('class-switch')?.value === '{ids[cn]}' && !!document.querySelector('.tab[aria-current=page]')?.href.endsWith('/pets')")
+            goto(page, BASE + f"#/c/{ids[cn]}/pets"); wait_js(page, f"document.getElementById('class-switch')?.value === '{ids[cn]}' && !!document.querySelector('.tab[aria-current=page]')?.href.endsWith('/pets')")
             verify_against_db(page, f'{cn} 寵物頁', dom_avatars(page, '.pet-list .avatar, .status-grid .avatar'), by)
-            page.goto(BASE + f"#/c/{ids[cn]}/poster"); page.wait_for_selector('#poster')
+            goto(page, BASE + f"#/c/{ids[cn]}/poster"); page.wait_for_selector('#poster')
             verify_against_db(page, f'{cn} 海報', dom_avatars(page, '#poster .avatar'), by)
             sample = random.sample(f['students'], 2)
             for s in sample:
-                page.goto(BASE + f"#/s/{s['id']}"); wait_js(page, f"document.querySelector('.pet-card > .avatar')?.dataset.student === '{s['id']}'")
+                goto(page, BASE + f"#/s/{s['id']}"); wait_js(page, f"document.querySelector('.pet-card > .avatar')?.dataset.student === '{s['id']}'")
                 av = dom_avatars(page, '.pet-card > .avatar')
                 verify_against_db(page, f'{cn} 學生資料頁 {s["name"]}', av, by)
                 if s['pet']:
                     tl = page.eval_on_selector_all('.timeline .avatar', 'els => els.map(e => e.dataset.species)')
                     check(f'{cn} {s["name"]} 成長路線只顯示自己的品種', set(tl) == {s['pet']['species_key']}, str(set(tl)))
-        page.goto(BASE + f"#/c/{ids['4A']}/room"); page.wait_for_selector('.stu'); page.screenshot(path=f'{OUT}/room-desktop.png', full_page=True)
-        page.goto(BASE + f"#/c/{ids['4A']}/poster"); page.wait_for_selector('#poster'); page.wait_for_timeout(300)
+        goto(page, BASE + f"#/c/{ids['4A']}/room"); page.wait_for_selector('.stu'); page.screenshot(path=f'{OUT}/room-desktop.png', full_page=True)
+        goto(page, BASE + f"#/c/{ids['4A']}/poster"); page.wait_for_selector('#poster'); page.wait_for_timeout(300)
         page.locator('#poster').screenshot(path=f'{OUT}/poster.png')
-        page.goto(BASE + f"#/s/{pre_id}"); page.wait_for_selector('.pet-card'); page.screenshot(path=f'{OUT}/student.png', full_page=True)
-        page.goto(BASE + f"#/c/{ids['4B']}/pets"); page.wait_for_selector('.dex'); page.screenshot(path=f'{OUT}/pets.png', full_page=True)
+        goto(page, BASE + f"#/s/{pre_id}"); page.wait_for_selector('.pet-card'); page.screenshot(path=f'{OUT}/student.png', full_page=True)
+        goto(page, BASE + f"#/c/{ids['4B']}/pets"); page.wait_for_selector('.dex'); page.screenshot(path=f'{OUT}/pets.png', full_page=True)
 
         # 圖鑑：40 格逐一載入成功
         dex = page.eval_on_selector_all('.dex img', "els => els.map(e => ({ src: e.getAttribute('src'), ok: e.complete && e.naturalWidth > 0 }))")
@@ -375,7 +385,7 @@ try:
         check('圖鑑 40 張圖全部成功載入', len(dex) == 40 and all(d['ok'] for d in dex) and len({d['src'] for d in dex}) == 40, f"{sum(d['ok'] for d in dex)}/{len(dex)}")
 
         # 功課及考試
-        page.goto(BASE + f"#/c/{ids['4A']}/homework"); page.wait_for_selector('#tpl-row .tpl')
+        goto(page, BASE + f"#/c/{ids['4A']}/homework"); page.wait_for_selector('#tpl-row .tpl')
         page.click('#tpl-row .use:has-text("數學工作紙")')
         check('按常用功課自動填好名稱及科目', page.input_value('#hw-title') == '數學工作紙' and page.input_value('#hw-subj') == '數學' and page.input_value('#hw-due') != '')
         page.screenshot(path=f'{OUT}/homework-templates.png', full_page=True)
@@ -384,16 +394,16 @@ try:
         page.wait_for_selector('.status-grid')
         tpls = api(page, 'GET', '/homework-templates')
         check('勾選後儲存為常用功課', any(t['title'] == '周記' and t['subject'] == '中文' for t in tpls), str([t['title'] for t in tpls]))
-        page.goto(BASE + f"#/c/{ids['4A']}/homework"); page.wait_for_selector('#tpl-row .use:has-text("周記")')
+        goto(page, BASE + f"#/c/{ids['4A']}/homework"); page.wait_for_selector('#tpl-row .use:has-text("周記")')
         page.click('#tpl-row .tpl:has-text("周記") .del'); page.click('dialog button:has-text("刪除")'); page.wait_for_timeout(400)
         check('刪除常用功課', page.locator('#tpl-row .use:has-text("周記")').count() == 0 and not any(t['title'] == '周記' for t in api(page, 'GET', '/homework-templates')))
         page.click('.hw-card >> nth=0'); page.wait_for_selector('.status-grid')
         page.wait_for_selector('.status-grid'); page.locator('[data-v=missing]').nth(1).click(); page.wait_for_timeout(200)
-        page.click('text=未記錄的全部設為已交'); page.wait_for_timeout(300)
+        page.click('text=未記錄的全部設為已交'); page.wait_for_selector('text=已將 11 位設為已交')
         hw = api(page, 'GET', f"/classes/{ids['4A']}/homework")[0]
         check('功課提交紀錄', hw['submitted'] == 11 and hw['missing'] == 1, str(hw))
         page.screenshot(path=f'{OUT}/homework.png', full_page=True)
-        page.goto(BASE + f"#/c/{ids['4A']}/exams"); page.fill('#ex-title', '第一次小測'); page.fill('#ex-subj', '數學'); page.click('button:has-text("新增考試")')
+        goto(page, BASE + f"#/c/{ids['4A']}/exams"); page.fill('#ex-title', '第一次小測'); page.fill('#ex-subj', '數學'); page.click('button:has-text("新增考試")')
         page.wait_for_selector('input[id^=sc-]')
         for i, inp in enumerate(page.locator('input[id^=sc-]').all()): inp.fill(str(50 + i * 4))
         page.click('text=儲存分數'); page.wait_for_selector('text=已儲存分數')
@@ -401,7 +411,7 @@ try:
         check('考試成績平均', abs(ex['avg'] - 72) < 0.01, str(ex['avg']))
 
         # 門檻：老師調整
-        page.goto(BASE + '#/settings'); page.fill('#th-baby', '3'); page.fill('#th-junior', '10'); page.click('text=儲存門檻'); page.wait_for_timeout(400)
+        goto(page, BASE + '#/settings'); page.fill('#th-baby', '3'); page.fill('#th-junior', '10'); page.click('text=儲存門檻'); page.wait_for_timeout(400)
         page.click('text=立即檢查'); page.wait_for_selector('#audit-out .chip')
         audit_text = page.inner_text('#audit-out')
         check('資料一致性檢查：全部一致', '全部一致' in audit_text, audit_text)
@@ -412,7 +422,7 @@ try:
         c6ids = [x['id'] for x in api(page, 'GET', f"/classes/{ids['6C']}/full")['students']]
         con.execute(f"UPDATE student_pets SET assigned_at = {old} WHERE student_record_id IN ({','.join(map(str, c6ids))})")
         con.execute(f"UPDATE score_events SET created_at = {old} WHERE student_id IN ({','.join(map(str, c6ids))})"); con.commit(); con.close()
-        page.goto(BASE + '#/classes'); page.goto(BASE + f"#/c/{ids['6C']}/room"); wait_js(page, f"document.getElementById('class-switch')?.value === '{ids['6C']}' && !!document.querySelector('#room-grid .stu')")
+        goto(page, BASE + '#/classes'); goto(page, BASE + f"#/c/{ids['6C']}/room"); wait_js(page, f"document.getElementById('class-switch')?.value === '{ids['6C']}' && !!document.querySelector('#room-grid .stu')")
         page.reload(); page.wait_for_selector('#room-grid .stu')
         hungry_cards = page.locator('#room-grid .stu.hungry').count()
         check('肚餓：超過門檻的寵物顯示「幫幫我！」', hungry_cards == 4 and page.locator('#room-grid .hungry-bubble.lv2').count() == 4, str(hungry_cards))
@@ -423,7 +433,7 @@ try:
         page.screenshot(path=f'{OUT}/hungry-fed.png')
         page.click('.celebrate .cele-card')
         check('餵完即飽：提示消失，其餘仍肚餓', page.locator(f'.stu[data-id="{c6ids[0]}"] .hungry-bubble').count() == 0 and page.locator('#room-grid .stu.hungry').count() == 3)
-        page.goto(BASE + f"#/s/{c6ids[1]}"); page.wait_for_selector('.pet-card .speech')
+        goto(page, BASE + f"#/s/{c6ids[1]}"); page.wait_for_selector('.pet-card .speech')
         check('學生頁顯示寵物說話', '幫幫我' in page.inner_text('.pet-card .speech') or '孵化' in page.inner_text('.pet-card .speech'), page.inner_text('.pet-card .speech'))
         page.screenshot(path=f'{OUT}/hungry-student.png', full_page=True)
 
@@ -443,12 +453,12 @@ try:
         st = other.evaluate(f"fetch('/api/classes/{ids['4A']}/full').then(r => r.status)")
         check('其他老師不能讀取本班（404）', st == 404, str(st))
         # 管理員頁（第一位註冊的陳老師是管理員）
-        page.goto(BASE + '#/admin'); page.wait_for_selector('.admin-teacher')
+        goto(page, BASE + '#/admin'); page.wait_for_selector('.admin-teacher')
         txt = page.inner_text('main')
         check('管理員頁：列出全部老師及班別', page.locator('.admin-teacher').count() == 2 and '4A' in txt and '6C' in txt and '李老師' in txt, str(page.locator('.admin-teacher').count()))
         check('管理員頁：唔顯示學生姓名或密碼', not any(n in txt for n in names4a + names4b) and 'Password' not in txt)
         page.screenshot(path=f'{OUT}/admin.png', full_page=True)
-        other.goto(BASE + '#/admin'); other.wait_for_timeout(800)
+        goto(other, BASE + '#/admin'); other.wait_for_timeout(800)
         check('非管理員入唔到管理員頁', other.locator('.admin-teacher').count() == 0 and other.evaluate("fetch('/api/admin/teachers').then(r => r.status)") == 403)
         br.close()
     check('瀏覽器無 JavaScript 錯誤', not errors, ' | '.join(errors[:5]))

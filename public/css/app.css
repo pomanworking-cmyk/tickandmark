@@ -288,13 +288,16 @@ dialog.full .sheet { height: 100%; max-height: none; border-radius: 0; display: 
 @media (max-width: 600px) {
   .size-m { --card: 104px; } .size-l { --card: 150px; }
   h1 { font-size: 1.35rem; }
-  .class-switch { max-width: 110px; }
+  .class-switch { max-width: 130px; min-width: 88px; flex: 0 0 auto; }
+  .topbar-row { gap: 8px; padding: 8px 12px; }
+  .brand .brand-text { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 @media print {
   body * { visibility: hidden; }
   .poster, .poster * { visibility: visible; }
-  .poster { position: absolute; left: 0; top: 0; }
+  .poster { position: absolute; left: 0; top: 0; transform: none !important; }
+  .poster-wrap { height: auto !important; }
   @page { size: A4; margin: 0; }
 }
 .sheet:focus { outline: none; }
@@ -597,3 +600,22 @@ h1 { font-size: 1.45rem; } h2 { font-size: 1.15rem; } h3 { font-size: 1rem; }
 .at-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 12px 0 4px; }
 .at-grid > div { background: var(--surface-2); border-radius: 14px; padding: 8px 12px; display: grid; }
 .at-grid span { font-size: .78rem; color: var(--muted); font-weight: 700; }
+
+/* 轉頁載入中：內容變淡、暫停操作（頂部導覽仍可用） */
+body.loading main { opacity: .45; pointer-events: none; transition: opacity .15s .05s; }
+body.loading::after { content: ''; position: fixed; top: 0; left: 0; height: 3px; width: 40%; background: var(--accent-strong); border-radius: 0 3px 3px 0; animation: tm-load 1s ease-in-out infinite; z-index: 9999; }
+@keyframes tm-load { 0% { left: -40%; } 100% { left: 100%; } }
+
+/* 手機：海報按比例縮細顯示（列印時仍是 A4 原大小） */
+.poster-wrap { overflow: hidden; }
+.poster { transform-origin: top left; }
+.poster-empty { margin: 40px 0; padding: 30px; text-align: center; font-size: 26px; font-weight: 800; background: rgba(255,255,255,.75); border-radius: 24px; }
+@media (max-width: 600px) {
+  .tool-row { flex-wrap: wrap; overflow: visible; }
+  .tabs .tab { padding-left: 10px; padding-right: 10px; }
+}
+.selbar > span { white-space: nowrap; }
+/* 多選列出現時，提示訊息放高少少，唔好疊埋一齊 */
+body:has(.selbar) .toasts { bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
+/* 課室最底留位，免得多選列遮住最後一行學生 */
+#room-grid { padding-bottom: 80px; }

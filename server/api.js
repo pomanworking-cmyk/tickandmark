@@ -22,11 +22,20 @@ const now = () => new Date().toISOString();
 
 export async function seedTeacher(db, teacherId) {
   (await db.run('INSERT OR IGNORE INTO settings (teacher_id, thresholds) VALUES (?, ?)', teacherId, JSON.stringify(DEFAULT_THRESHOLDS)));
-  for (const [n, [l, p, i]] of DEFAULT_TAGS.entries()) await db.run('INSERT INTO behavior_tags (teacher_id, label, points, icon, sort) VALUES (?,?,?,?,?)', teacherId, l, p, i, n);
-  for (const [t, sj] of DEFAULT_HW_TEMPLATES) await db.run('INSERT OR IGNORE INTO homework_templates (teacher_id, title, subject) VALUES (?,?,?)', teacherId, t, sj);
-  for (const [n, [t, c, i]] of DEFAULT_REWARDS.entries()) await db.run('INSERT INTO rewards (teacher_id, title, cost, icon, sort) VALUES (?,?,?,?,?)', teacherId, t, c, i, n);
+  await db.batch([
+    ...DEFAULT_TAGS.map(([l, p, i], n) => ['INSERT INTO behavior_tags (teacher_id, label, points, icon, sort) VALUES (?,?,?,?,?)', teacherId, l, p, i, n]),
+    ...DEFAULT_HW_TEMPLATES.map(([t, sj]) => ['INSERT OR IGNORE INTO homework_templates (teacher_id, title, subject) VALUES (?,?,?)', teacherId, t, sj]),
+    ...DEFAULT_REWARDS.map(([t, c, i], n) => ['INSERT INTO rewards (teacher_id, title, cost, icon, sort) VALUES (?,?,?,?,?)', teacherId, t, c, i, n])]);
 }
 const isDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''));
+
+const CLASSES_SQL = `SELECT c.*,
+    (SELECT COUNT(*) FROM students s WHERE s.class_id = c.id) AS student_count,
+    (SELECT COALESCE(SUM(score),0) FROM students s WHERE s.class_id = c.id) AS total_score,
+    (SELECT COUNT(*) FROM student_pets p JOIN students s ON s.id = p.student_record_id WHERE s.class_id = c.id) AS pet_count
+  FROM classes c WHERE c.teacher_id = ? ORDER BY c.name`;
+const TEMPLATES_SQL = 'SELECT id, title, subject FROM homework_templates WHERE teacher_id = ? ORDER BY subject, title, id';
+const REWARDS_SQL = 'SELECT id, title, cost, icon, sort FROM rewards WHERE teacher_id = ? ORDER BY sort, id';
 
 export function createApi(db) {
   const routes = [];
@@ -71,6 +80,14 @@ export function createApi(db) {
     const pm = new Map(pets.map(p => [p.student_record_id, petRow(p)]));
     return new Map(rows.map(r => [r.id, { ...r, pet: pm.get(r.id) || null }]));
   };
+  // 一次查詢核對多位學生屬於此老師（及此班）；任何一位不符即報錯
+  const ownStudents = async (ids, tid, classId = null) => {
+    if (!ids.length) return new Map();
+    const rows = await db.all(`SELECT * FROM students WHERE teacher_id = ? AND id IN (${inList(ids)})`, tid, ...ids);
+    const m = new Map(rows.map(r => [r.id, r]));
+    for (const id of ids) { const s = m.get(id); if (!s) throw notFound(); if (classId != null && s.class_id !== classId) throw bad('學生不屬於此班'); }
+    return m;
+  };
   const studentFull = async (id) => {
     const s = (await db.get(`SELECT s.*, (SELECT COALESCE(SUM(cost),0) FROM redemptions r WHERE r.student_id = s.id AND r.undone_at IS NULL) AS spent
       FROM students s WHERE s.id = ?`, id));
@@ -78,16 +95,21 @@ export function createApi(db) {
   };
 
   // ---------- 啟動資料 ----------
-  on('GET', '/bootstrap', async ({ tid }) => ({
-    thresholds: await thresholdsOf(tid),
-    hunger_days: (await db.get('SELECT hunger_days FROM settings WHERE teacher_id = ?', tid))?.hunger_days ?? 3,
-    timer_presets: JSON.parse((await db.get('SELECT timer_presets FROM settings WHERE teacher_id = ?', tid))?.timer_presets || '[60,180,300,600]'),
-    tags: (await db.all('SELECT * FROM behavior_tags WHERE teacher_id = ? ORDER BY sort, id', tid)),
-    classes: await listClasses(tid),
-    homework_templates: await listTemplates(tid),
-    rewards: await listRewards(tid),
-  }));
-  const listTemplates = async (tid) => (await db.all('SELECT id, title, subject FROM homework_templates WHERE teacher_id = ? ORDER BY subject, title, id', tid));
+  // 一次 HTTP 請求讀取全部啟動資料（雲端資料庫每次來回都需要時間）
+  on('GET', '/bootstrap', async ({ tid }) => {
+    const [st, tags, classes, tpls, rewards] = await db.batch([
+      ['SELECT thresholds, hunger_days, timer_presets FROM settings WHERE teacher_id = ?', tid],
+      ['SELECT * FROM behavior_tags WHERE teacher_id = ? ORDER BY sort, id', tid],
+      [CLASSES_SQL, tid], [TEMPLATES_SQL, tid], [REWARDS_SQL, tid]]);
+    const row = st.rows[0];
+    return {
+      thresholds: row ? normalizeThresholds(JSON.parse(row.thresholds)) : { ...DEFAULT_THRESHOLDS },
+      hunger_days: row?.hunger_days ?? 3,
+      timer_presets: JSON.parse(row?.timer_presets || '[60,180,300,600]'),
+      tags: tags.rows, classes: classes.rows, homework_templates: tpls.rows, rewards: rewards.rows,
+    };
+  });
+  const listTemplates = async (tid) => (await db.all(TEMPLATES_SQL, tid));
 
   // ---------- 常用功課範本 ----------
   on('GET', '/homework-templates', async ({ tid }) => await listTemplates(tid));
@@ -100,13 +122,7 @@ export function createApi(db) {
     await own('homework_templates', p.id, tid); (await db.run('DELETE FROM homework_templates WHERE id = ?', p.id)); return await listTemplates(tid);
   });
 
-  async function listClasses(tid) {
-    return (await db.all(`SELECT c.*,
-        (SELECT COUNT(*) FROM students s WHERE s.class_id = c.id) AS student_count,
-        (SELECT COALESCE(SUM(score),0) FROM students s WHERE s.class_id = c.id) AS total_score,
-        (SELECT COUNT(*) FROM student_pets p JOIN students s ON s.id = p.student_record_id WHERE s.class_id = c.id) AS pet_count
-      FROM classes c WHERE c.teacher_id = ? ORDER BY c.name`, tid));
-  }
+  async function listClasses(tid) { return (await db.all(CLASSES_SQL, tid)); }
 
   // ---------- 班別 ----------
   on('GET', '/classes', async ({ tid }) => await listClasses(tid));
@@ -124,12 +140,14 @@ export function createApi(db) {
     await own('classes', p.id, tid); (await db.run('DELETE FROM classes WHERE id = ?', p.id)); return { ok: true };
   });
   on('GET', '/classes/:id/full', async ({ tid, p }) => {
-    const c = await own('classes', p.id, tid);
-    return {
-      class: c,
-      students: await studentsOf(c.id),
-      groups: (await db.all('SELECT * FROM groups WHERE class_id = ? ORDER BY id', c.id)),
-    };
+    const [cr, rows, pets, groups] = await db.batch([
+      ['SELECT * FROM classes WHERE id = ? AND teacher_id = ?', p.id, tid],
+      [`${STUDENT_SELECT} WHERE s.class_id = ? AND s.teacher_id = ? ORDER BY s.number IS NULL, s.number, s.id`, p.id, tid],
+      [`${PET_SELECT} JOIN students s ON s.id = p.student_record_id WHERE s.class_id = ? AND s.teacher_id = ?`, p.id, tid],
+      ['SELECT * FROM groups WHERE class_id = ? AND teacher_id = ? ORDER BY id', p.id, tid]]);
+    const c = cr.rows[0]; if (!c) throw notFound();
+    const byStudent = new Map(pets.rows.map(x => [x.student_record_id, petRow(x)]));
+    return { class: c, students: rows.rows.map(s => ({ ...s, pet: byStudent.get(s.id) || null })), groups: groups.rows };
   });
 
   // ---------- 點名 ----------
@@ -140,12 +158,10 @@ export function createApi(db) {
   on('PUT', '/classes/:id/attendance', async ({ tid, p, body }) => {
     const c = await own('classes', p.id, tid); if (!isDate(body.date)) throw bad('日期格式不正確');
     const ids = [...new Set((body.absent || []).map(int))];
+    await ownStudents(ids, tid, c.id);
     await db.tx(async () => {
-      (await db.run('DELETE FROM attendance WHERE class_id = ? AND date = ?', c.id, body.date));
-      for (const id of ids) {
-        const s = await own('students', id, tid); if (s.class_id !== c.id) throw bad('學生不屬於此班');
-        (await db.run("INSERT INTO attendance (teacher_id, class_id, student_id, date, status) VALUES (?,?,?,?, 'absent')", tid, c.id, s.id, body.date));
-      }
+      await db.batch([['DELETE FROM attendance WHERE class_id = ? AND date = ?', c.id, body.date],
+        ...ids.map(id => ["INSERT INTO attendance (teacher_id, class_id, student_id, date, status) VALUES (?,?,?,?, 'absent')", tid, c.id, id, body.date])]);
     });
     return { date: body.date, absent: ids.sort((a, b) => a - b) };
   });
@@ -176,7 +192,7 @@ export function createApi(db) {
   });
 
   // ---------- 獎勵兌換 ----------
-  const listRewards = async (tid) => (await db.all('SELECT id, title, cost, icon, sort FROM rewards WHERE teacher_id = ? ORDER BY sort, id', tid));
+  const listRewards = async (tid) => (await db.all(REWARDS_SQL, tid));
   on('GET', '/rewards', async ({ tid }) => await listRewards(tid));
   on('POST', '/rewards', async ({ tid, body }) => {
     const title = str(body.title, 20); const cost = int(body.cost);
@@ -216,19 +232,19 @@ export function createApi(db) {
   on('PUT', '/classes/:id/regroup', async ({ tid, p, body }) => {
     const c = await own('classes', p.id, tid); const groups = Array.isArray(body.groups) ? body.groups : [];
     if (!groups.length || groups.length > 20) throw bad('組數須為 1 至 20');
-    const seen = new Set();
+    const seen = new Set(); const members = [];
+    for (const g of groups) {
+      const name = str(g.name, 20); if (!name) throw bad('小組名稱不可留空');
+      const sids = (g.student_ids || []).map(int);
+      for (const sid of sids) { if (seen.has(sid)) throw bad('同一位學生不可同時在兩組'); seen.add(sid); }
+      members.push({ name, color: str(g.color, 9) || '#8cc4f5', sids });
+    }
+    await ownStudents([...seen], tid, c.id);
     await db.tx(async () => {
-      (await db.run('UPDATE students SET group_id = NULL WHERE class_id = ?', c.id));
-      (await db.run('DELETE FROM groups WHERE class_id = ?', c.id));
-      for (const g of groups) {
-        const name = str(g.name, 20); if (!name) throw bad('小組名稱不可留空');
-        const gid = Number((await db.run('INSERT INTO groups (teacher_id, class_id, name, color) VALUES (?,?,?,?)', tid, c.id, name, str(g.color, 9) || '#8cc4f5')).lastInsertRowid);
-        for (const sid of (g.student_ids || []).map(int)) {
-          const s = await own('students', sid, tid); if (s.class_id !== c.id) throw bad('學生不屬於此班');
-          if (seen.has(sid)) throw bad('同一位學生不可同時在兩組'); seen.add(sid);
-          (await db.run('UPDATE students SET group_id = ? WHERE id = ?', gid, sid));
-        }
-      }
+      const res = await db.batch([['UPDATE students SET group_id = NULL WHERE class_id = ?', c.id], ['DELETE FROM groups WHERE class_id = ?', c.id],
+        ...members.map(g => ['INSERT INTO groups (teacher_id, class_id, name, color) VALUES (?,?,?,?) RETURNING id', tid, c.id, g.name, g.color])]);
+      const gids = res.slice(2).map(r => r.rows[0].id);
+      await db.batch(members.flatMap((g, i) => g.sids.map(sid => ['UPDATE students SET group_id = ? WHERE id = ?', gids[i], sid])));
     });
     return { class: await own('classes', c.id, tid), students: await studentsOf(c.id), groups: (await db.all('SELECT * FROM groups WHERE class_id = ? ORDER BY id', c.id)) };
   });
@@ -245,14 +261,10 @@ export function createApi(db) {
       if (!(r >= 0 && r < 30 && col >= 0 && col < cols)) throw bad('座位位置不正確');
       const key = `${r},${col}`; if (used.has(key)) throw bad('同一個座位不可坐兩位學生'); used.add(key);
     }
+    await ownStudents(seats.map(st => int(st.student_id)), tid, c.id);
     await db.tx(async () => {
-      (await db.run('UPDATE classes SET seat_cols = ? WHERE id = ?', cols, c.id));
-      (await db.run('UPDATE students SET seat_row = NULL, seat_col = NULL WHERE class_id = ?', c.id));
-      for (const st of seats) {
-        const s = await own('students', int(st.student_id), tid);
-        if (s.class_id !== c.id) throw bad('學生不屬於此班');
-        (await db.run('UPDATE students SET seat_row = ?, seat_col = ? WHERE id = ?', int(st.row), int(st.col), s.id));
-      }
+      await db.batch([['UPDATE classes SET seat_cols = ? WHERE id = ?', cols, c.id], ['UPDATE students SET seat_row = NULL, seat_col = NULL WHERE class_id = ?', c.id],
+        ...seats.map(st => ['UPDATE students SET seat_row = ?, seat_col = ? WHERE id = ?', int(st.row), int(st.col), int(st.student_id)])]);
     });
     return { class: await own('classes', c.id, tid), students: await studentsOf(c.id), groups: (await db.all('SELECT * FROM groups WHERE class_id = ? ORDER BY id', c.id)) };
   });
@@ -263,21 +275,21 @@ export function createApi(db) {
     const list = Array.isArray(body.students) ? body.students : [];
     if (!list.length) throw bad('沒有學生資料');
     if (list.length > 60) throw bad('一次最多匯入 60 名學生');
+    const rowsIn = [];
+    for (const raw of list) {
+      const name = str(raw.name, 40); if (!name) continue;
+      const number = raw.number === '' || raw.number == null ? null : int(raw.number);
+      const score = raw.score === '' || raw.score == null ? 0 : int(raw.score);
+      if (Number.isNaN(number) || Number.isNaN(score)) throw bad(`「${name}」的班號或分數不是整數`);
+      rowsIn.push({ name, number, score });
+    }
     return db.tx(async () => {
-      const created = [];
-      for (const raw of list) {
-        const name = str(raw.name, 40); if (!name) continue;
-        const number = raw.number === '' || raw.number == null ? null : int(raw.number);
-        const score = raw.score === '' || raw.score == null ? 0 : int(raw.score);
-        if (Number.isNaN(number) || Number.isNaN(score)) throw bad(`「${name}」的班號或分數不是整數`);
-        const r = (await db.run('INSERT INTO students (teacher_id, class_id, number, name, score) VALUES (?,?,?,?,?)', tid, c.id, number, name, score));
-        const sid = Number(r.lastInsertRowid);
-        if (score) {
-          (await db.run(`INSERT INTO score_events (teacher_id, class_id, student_id, kind, delta, reason) VALUES (?,?,?,'import',?,?)`, tid, c.id, sid, score, '保留舊分數（匯入）'));
-        }
-        created.push(await studentFull(sid));
-      }
-      return { created };
+      // 先逐位加入學生（保持次序），再一次過記錄舊分數；全部一次 HTTP 請求完成
+      const res = await db.batch(rowsIn.map(r => ['INSERT INTO students (teacher_id, class_id, number, name, score) VALUES (?,?,?,?,?) RETURNING id', tid, c.id, r.number, r.name, r.score]));
+      const ids = res.map(r => r.rows[0].id);
+      await db.batch(rowsIn.flatMap((r, i) => r.score ? [[`INSERT INTO score_events (teacher_id, class_id, student_id, kind, delta, reason) VALUES (?,?,?,'import',?,?)`, tid, c.id, ids[i], r.score, '保留舊分數（匯入）']] : []));
+      const full = await studentsByIds(ids);
+      return { created: ids.map(id => full.get(id)) };
     });
   });
   on('GET', '/students/:id', async ({ tid, p }) => {
@@ -329,13 +341,9 @@ export function createApi(db) {
   on('PUT', '/groups/:id/members', async ({ tid, p, body }) => {
     const g = await own('groups', p.id, tid);
     const ids = (body.student_ids || []).map(int);
+    await ownStudents(ids, tid, g.class_id);
     await db.tx(async () => {
-      (await db.run('UPDATE students SET group_id = NULL WHERE group_id = ?', g.id));
-      for (const id of ids) {
-        const s = await own('students', id, tid);
-        if (s.class_id !== g.class_id) throw bad('學生不屬於此班');
-        (await db.run('UPDATE students SET group_id = ? WHERE id = ?', g.id, id));
-      }
+      await db.batch([['UPDATE students SET group_id = NULL WHERE group_id = ?', g.id], ...ids.map(id => ['UPDATE students SET group_id = ? WHERE id = ?', g.id, id])]);
     });
     return { ok: true };
   });
@@ -359,10 +367,16 @@ export function createApi(db) {
 
   // ---------- 加減分（核心） ----------
   async function batchResult(batchId) {
-    const b = (await db.get('SELECT * FROM score_batches WHERE id = ?', batchId));
-    const evs = (await db.all(`SELECT e.*, l.xp AS xp_gained, l.stage_before, l.stage_after FROM score_events e
-      LEFT JOIN pet_xp_ledger l ON l.score_event_id = e.id WHERE e.batch_id = ? ORDER BY e.id`, batchId));
-    const studs = await studentsByIds([...new Set(evs.map(e => e.student_id))]);
+    const IN_BATCH = '(SELECT student_id FROM score_events WHERE batch_id = ?)';
+    const [br, er, sr, pr] = await db.batch([
+      ['SELECT * FROM score_batches WHERE id = ?', batchId],
+      [`SELECT e.*, l.xp AS xp_gained, l.stage_before, l.stage_after FROM score_events e
+      LEFT JOIN pet_xp_ledger l ON l.score_event_id = e.id WHERE e.batch_id = ? ORDER BY e.id`, batchId],
+      [`${STUDENT_SELECT} WHERE s.id IN ${IN_BATCH}`, batchId],
+      [`${PET_SELECT} WHERE p.student_record_id IN ${IN_BATCH}`, batchId]]);
+    const b = br.rows[0]; const evs = er.rows;
+    const pm = new Map(pr.rows.map(x => [x.student_record_id, petRow(x)]));
+    const studs = new Map(sr.rows.map(r => [r.id, { ...r, pet: pm.get(r.id) || null }]));
     return {
       batch_id: b.id, label: b.label, undone: !!b.undone_at,
       results: evs.map((e, _i, _a, s = studs.get(e.student_id)) => {
@@ -378,46 +392,60 @@ export function createApi(db) {
   }
 
   on('POST', '/points', async ({ tid, body }) => {
-    const c = await own('classes', int(body.class_id), tid);
     const clientBatch = str(body.client_batch_id, 64);
+    // 一次讀取：班別、是否重複提交、標籤、升級門檻
+    const [cr, ex, tg, thr] = await db.batch([
+      ['SELECT * FROM classes WHERE id = ? AND teacher_id = ?', int(body.class_id), tid],
+      ['SELECT id FROM score_batches WHERE teacher_id = ? AND client_batch_id = ?', tid, clientBatch],
+      ['SELECT * FROM behavior_tags WHERE id = ? AND teacher_id = ?', body.tag_id ? int(body.tag_id) : -1, tid],
+      ['SELECT thresholds FROM settings WHERE teacher_id = ?', tid]]);
+    const c = cr.rows[0]; if (!c) throw notFound();
     if (!clientBatch) throw bad('缺少操作編號');
-    const existing = (await db.get('SELECT id FROM score_batches WHERE teacher_id = ? AND client_batch_id = ?', tid, clientBatch));
+    const existing = ex.rows[0];
     if (existing) return { ...(await batchResult(existing.id)), replayed: true }; // 重複提交：不會再加一次
 
     let delta = int(body.delta); let tag = null;
-    if (body.tag_id) { tag = await own('behavior_tags', int(body.tag_id), tid); delta = tag.points; }
+    if (body.tag_id) { tag = tg.rows[0]; if (!tag) throw notFound(); delta = tag.points; }
     if (!delta || Math.abs(delta) > 100) throw bad('分數必須是 -100 至 100 的整數（不可為 0）');
     const ids = [...new Set((body.student_ids || []).map(int))];
     if (!ids.length) throw bad('請選擇學生');
-    const th = await thresholdsOf(tid);
+    const th = thr.rows[0] ? normalizeThresholds(JSON.parse(thr.rows[0].thresholds)) : { ...DEFAULT_THRESHOLDS };
     const reason = str(body.reason, 60);
     const label = tag ? `${tag.icon} ${tag.label}` : (reason || (delta > 0 ? `加 ${delta} 分` : `扣 ${-delta} 分`));
 
-    const batchId = await db.tx(async () => {
-      const b = (await db.run('INSERT INTO score_batches (teacher_id, class_id, client_batch_id, label) VALUES (?,?,?,?)', tid, c.id, clientBatch, label));
-      const bid = Number(b.lastInsertRowid);
-      const rows = await db.all(`SELECT id, class_id FROM students WHERE teacher_id = ? AND id IN (${inList(ids)})`, tid, ...ids);
-      const owned = new Map(rows.map(r => [r.id, r]));
-      const petRows = await db.all(`SELECT * FROM student_pets WHERE student_record_id IN (${inList(ids)})`, ...ids);
-      const pets = new Map(petRows.map(p => [p.student_record_id, p]));
-      for (const sid of ids) {
-        const s = owned.get(sid); if (!s) throw notFound();
-        if (s.class_id !== c.id) throw bad('學生不屬於此班');
-        const event = await db.get(`INSERT INTO score_events (teacher_id, class_id, student_id, batch_id, kind, delta, tag_id, reason) VALUES (?,?,?,?, 'point', ?,?,?) RETURNING *`, tid, c.id, sid, bid, delta, tag?.id ?? null, reason);
-        (await db.run('UPDATE students SET score = score + ? WHERE id = ?', delta, sid));
-        const pet = pets.get(sid);
-        if (isXpEligible(event, pet)) {
-          const xp = pet.xp + delta;
-          const stage = nextStage(pet.stage, xp, th);
-          const ins = (await db.run('INSERT OR IGNORE INTO pet_xp_ledger (score_event_id, pet_id, xp, stage_before, stage_after) VALUES (?,?,?,?,?)', event.id, pet.id, delta, pet.stage, stage));
-          if (Number(ins.changes) === 1) {
-            (await db.run(`UPDATE student_pets SET xp = ?, stage = ?, updated_at = ?,
-                hatched_at = CASE WHEN hatched_at IS NULL AND ? <> 'egg' THEN ? ELSE hatched_at END WHERE id = ?`, xp, stage, now(), stage, now(), pet.id));
-          }
-        }
-      }
+    let batchId;
+    try { batchId = await db.tx(async () => {
+      const [b, sr, pr] = await db.batch([
+        ['INSERT INTO score_batches (teacher_id, class_id, client_batch_id, label) VALUES (?,?,?,?) RETURNING id', tid, c.id, clientBatch, label],
+        [`SELECT id, class_id FROM students WHERE teacher_id = ? AND id IN (${inList(ids)})`, tid, ...ids],
+        [`SELECT * FROM student_pets WHERE student_record_id IN (${inList(ids)})`, ...ids]]);
+      const bid = b.rows[0].id;
+      const owned = new Map(sr.rows.map(r => [r.id, r]));
+      const pets = new Map(pr.rows.map(p => [p.student_record_id, p]));
+      for (const sid of ids) { const s = owned.get(sid); if (!s) throw notFound(); if (s.class_id !== c.id) throw bad('學生不屬於此班'); }
+      // 一次 HTTP 請求寫入全部分數紀錄及總分；再一次寫入寵物 XP（交易內，資料不會被其他請求改動）
+      const res = await db.batch(ids.flatMap(sid => [
+        [`INSERT INTO score_events (teacher_id, class_id, student_id, batch_id, kind, delta, tag_id, reason) VALUES (?,?,?,?, 'point', ?,?,?) RETURNING *`, tid, c.id, sid, bid, delta, tag?.id ?? null, reason],
+        ['UPDATE students SET score = score + ? WHERE id = ?', delta, sid]]));
+      const xpStmts = [];
+      ids.forEach((sid, i) => {
+        const event = res[i * 2].rows[0]; const pet = pets.get(sid);
+        if (!isXpEligible(event, pet)) return;
+        const xp = pet.xp + delta; const stage = nextStage(pet.stage, xp, th);
+        // score_event_id 是主鍵：同一筆加分在資料庫層面只可入帳一次
+        xpStmts.push(['INSERT INTO pet_xp_ledger (score_event_id, pet_id, xp, stage_before, stage_after) VALUES (?,?,?,?,?)', event.id, pet.id, delta, pet.stage, stage]);
+        xpStmts.push([`UPDATE student_pets SET xp = ?, stage = ?, updated_at = ?,
+                hatched_at = CASE WHEN hatched_at IS NULL AND ? <> 'egg' THEN ? ELSE hatched_at END WHERE id = ?`, xp, stage, now(), stage, now(), pet.id]);
+      });
+      await db.batch(xpStmts);
       return bid;
-    });
+    }); } catch (e) {
+      // 同一操作差不多同時送了兩次（例如網絡慢時重送）：第二次當作重複提交
+      if (!/UNIQUE/i.test(e.message) || !/client_batch_id/.test(e.message)) throw e;
+      const again = await db.get('SELECT id FROM score_batches WHERE teacher_id = ? AND client_batch_id = ?', tid, clientBatch);
+      if (!again) throw e;
+      return { ...(await batchResult(again.id)), replayed: true };
+    }
     return await batchResult(batchId);
   });
 
@@ -426,17 +454,18 @@ export function createApi(db) {
     if (b.undone_at) throw bad('此操作已撤銷');
     await db.tx(async () => {
       const t = now();
-      for (const e of (await db.all('SELECT * FROM score_events WHERE batch_id = ? AND undone_at IS NULL', b.id))) {
-        (await db.run('UPDATE score_events SET undone_at = ? WHERE id = ?', t, e.id));
-        (await db.run('UPDATE students SET score = score - ? WHERE id = ?', e.delta, e.student_id));
-        const l = (await db.get('SELECT * FROM pet_xp_ledger WHERE score_event_id = ? AND reversed_at IS NULL', e.id));
-        if (l) {
-          (await db.run('UPDATE pet_xp_ledger SET reversed_at = ? WHERE score_event_id = ?', t, e.id));
-          // XP 扣回，但階段不倒退
-          (await db.run('UPDATE student_pets SET xp = MAX(0, xp - ?), updated_at = ? WHERE id = ?', l.xp, t, l.pet_id));
-        }
+      const [evs, ls] = await db.batch([['SELECT * FROM score_events WHERE batch_id = ? AND undone_at IS NULL', b.id],
+        ['SELECT l.* FROM pet_xp_ledger l JOIN score_events e ON e.id = l.score_event_id WHERE e.batch_id = ? AND e.undone_at IS NULL AND l.reversed_at IS NULL', b.id]]);
+      const ledger = new Map(ls.rows.map(l => [l.score_event_id, l]));
+      const stmts = [];
+      for (const e of evs.rows) {
+        stmts.push(['UPDATE score_events SET undone_at = ? WHERE id = ?', t, e.id], ['UPDATE students SET score = score - ? WHERE id = ?', e.delta, e.student_id]);
+        const l = ledger.get(e.id);
+        // XP 扣回，但階段不倒退
+        if (l) stmts.push(['UPDATE pet_xp_ledger SET reversed_at = ? WHERE score_event_id = ?', t, e.id], ['UPDATE student_pets SET xp = MAX(0, xp - ?), updated_at = ? WHERE id = ?', l.xp, t, l.pet_id]);
       }
-      (await db.run('UPDATE score_batches SET undone_at = ? WHERE id = ?', t, b.id));
+      stmts.push(['UPDATE score_batches SET undone_at = ? WHERE id = ?', t, b.id]);
+      await db.batch(stmts);
     });
     return await batchResult(b.id);
   });
@@ -478,8 +507,9 @@ export function createApi(db) {
     const mode = str(body.species_key, 20);
     if (mode !== 'balanced' && !SPECIES_KEYS.includes(mode)) throw bad('請選擇寵物品種');
     return db.tx(async () => {
-      const students = [];
-      for (const id of ids) { const s = await own('students', id, tid); if (!(await petOf(s.id))) students.push(s); }
+      const owned = await ownStudents(ids, tid);
+      const has = new Set((await db.all(`SELECT student_record_id FROM student_pets WHERE student_record_id IN (${inList(ids)})`, ...ids)).map(r => r.student_record_id));
+      const students = ids.map(id => owned.get(id)).filter(s => !has.has(s.id));
       let picks;
       if (mode === 'balanced') {
         const classIds = [...new Set(students.map(s => s.class_id))];
@@ -488,12 +518,9 @@ export function createApi(db) {
         picks = balancedSpecies(students.length, counts);
       } else picks = students.map(() => mode);
       const baseline = (await db.get('SELECT COALESCE(MAX(id), 0) m FROM score_events')).m;
-      const created = [];
-      for (const [i, s] of students.entries()) {
-        (await db.run('INSERT INTO student_pets (teacher_id, student_record_id, species_key, baseline_event_id) VALUES (?,?,?,?)', tid, s.id, picks[i], baseline));
-        created.push(await studentFull(s.id));
-      }
-      return { created, skipped: ids.length - students.length };
+      await db.batch(students.map((s, i) => ['INSERT INTO student_pets (teacher_id, student_record_id, species_key, baseline_event_id) VALUES (?,?,?,?)', tid, s.id, picks[i], baseline]));
+      const full = await studentsByIds(students.map(s => s.id));
+      return { created: students.map(s => full.get(s.id)), skipped: ids.length - students.length };
     });
   });
 
@@ -592,17 +619,14 @@ export function createApi(db) {
   });
   on('PUT', '/homework/:id/submissions', async ({ tid, p, body }) => {
     const h = await own('homework', p.id, tid);
+    const entries = Array.isArray(body.entries) ? body.entries : [];
+    await ownStudents(entries.map(e => int(e.student_id)), tid, h.class_id);
+    for (const e of entries) if (e.status && !['submitted', 'late', 'missing', 'excused'].includes(e.status)) throw bad('未知提交狀態');
     await db.tx(async () => {
-      for (const e of body.entries || []) {
-        const s = await own('students', int(e.student_id), tid);
-        if (s.class_id !== h.class_id) throw bad('學生不屬於此班');
-        if (!e.status) (await db.run('DELETE FROM homework_submissions WHERE homework_id = ? AND student_id = ?', h.id, s.id));
-        else {
-          if (!['submitted', 'late', 'missing', 'excused'].includes(e.status)) throw bad('未知提交狀態');
-          (await db.run(`INSERT INTO homework_submissions (homework_id, student_id, status, updated_at) VALUES (?,?,?,?)
-            ON CONFLICT(homework_id, student_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at`, h.id, s.id, e.status, now()));
-        }
-      }
+      await db.batch(entries.map(e => (!e.status
+        ? ['DELETE FROM homework_submissions WHERE homework_id = ? AND student_id = ?', h.id, int(e.student_id)]
+        : [`INSERT INTO homework_submissions (homework_id, student_id, status, updated_at) VALUES (?,?,?,?)
+            ON CONFLICT(homework_id, student_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at`, h.id, int(e.student_id), e.status, now()])));
     });
     return { ok: true };
   });
@@ -628,17 +652,17 @@ export function createApi(db) {
   });
   on('PUT', '/exams/:id/scores', async ({ tid, p, body }) => {
     const x = await own('exams', p.id, tid);
-    await db.tx(async () => {
-      for (const e of body.scores || []) {
-        const s = await own('students', int(e.student_id), tid);
-        if (s.class_id !== x.class_id) throw bad('學生不屬於此班');
-        if (e.score === null || e.score === '') { (await db.run('DELETE FROM exam_scores WHERE exam_id = ? AND student_id = ?', x.id, s.id)); continue; }
-        const v = Number(e.score);
-        if (!(v >= 0 && v <= x.full_mark)) throw bad(`${s.name} 的分數須在 0 至 ${x.full_mark} 之間`);
-        (await db.run(`INSERT INTO exam_scores (exam_id, student_id, score) VALUES (?,?,?)
-          ON CONFLICT(exam_id, student_id) DO UPDATE SET score = excluded.score`, x.id, s.id, v));
-      }
+    const list = Array.isArray(body.scores) ? body.scores : [];
+    const owned = await ownStudents(list.map(e => int(e.student_id)), tid, x.class_id);
+    const stmts = list.map((e) => {
+      const s = owned.get(int(e.student_id));
+      if (e.score === null || e.score === '') return ['DELETE FROM exam_scores WHERE exam_id = ? AND student_id = ?', x.id, s.id];
+      const v = Number(e.score);
+      if (!(v >= 0 && v <= x.full_mark)) throw bad(`${s.name} 的分數須在 0 至 ${x.full_mark} 之間`);
+      return [`INSERT INTO exam_scores (exam_id, student_id, score) VALUES (?,?,?)
+          ON CONFLICT(exam_id, student_id) DO UPDATE SET score = excluded.score`, x.id, s.id, v];
     });
+    await db.tx(async () => { await db.batch(stmts); });
     return { ok: true };
   });
 
