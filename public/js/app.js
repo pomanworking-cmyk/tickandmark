@@ -886,33 +886,81 @@ async function openRegroup() {
   draw();
 }
 
+// ---------- 浮動小窗口（計時、噪音計）：唔會遮住課室，可以一邊加分一邊用 ----------
+function floatWin(id, title, body, { onClose, corner = 0 } = {}) {
+  let w = document.getElementById(id);
+  if (w) { w.classList.remove('min'); w.style.zIndex = String(++floatWin.z); w.animate?.([{ transform: 'scale(1.06)' }, { transform: 'scale(1)' }], 250); return { el: w, fresh: false }; }
+  w = document.createElement('div'); w.className = 'fw'; w.id = id; w.style.zIndex = String(++floatWin.z);
+  w.innerHTML = `<div class="fw-head"><span class="fw-title">${title}</span>
+      <button class="fw-btn" data-fw="min" title="縮細／放大" aria-label="縮細">▁</button>
+      <button class="fw-btn" data-fw="fs" title="全螢幕（投影用）" aria-label="全螢幕">⛶</button>
+      <button class="fw-btn" data-fw="close" title="關閉" aria-label="關閉">✕</button></div>
+    <div class="fw-body">${body}</div>`;
+  if (window.innerWidth < 600) w.classList.add('min'); // 手機預設細窗口，唔遮住學生
+  document.body.appendChild(w);
+  // 位置：記住老師上次拖到邊度；預設喺右下角
+  const saved = store.get('fwpos-' + id, null);
+  const place = (x, y) => {
+    const mx = Math.max(0, window.innerWidth - w.offsetWidth - 4); const my = Math.max(0, window.innerHeight - w.offsetHeight - 4);
+    x = Math.min(Math.max(4, x), mx); y = Math.min(Math.max(4, y), my);
+    w.style.left = x + 'px'; w.style.top = y + 'px'; return [x, y];
+  };
+  if (saved) place(saved[0], saved[1]);
+  else place(window.innerWidth - w.offsetWidth - 16, window.innerHeight - w.offsetHeight - 90 - corner * (w.offsetHeight + 12));
+  const head = w.querySelector('.fw-head');
+  head.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button') || document.fullscreenElement) return;
+    e.preventDefault(); w.style.zIndex = String(++floatWin.z);
+    const ox = e.clientX - w.offsetLeft; const oy = e.clientY - w.offsetTop; head.setPointerCapture(e.pointerId);
+    const move = (ev) => place(ev.clientX - ox, ev.clientY - oy);
+    const up = () => { head.removeEventListener('pointermove', move); head.removeEventListener('pointerup', up); head.removeEventListener('pointercancel', up);
+      store.set('fwpos-' + id, [w.offsetLeft, w.offsetTop]); };
+    head.addEventListener('pointermove', move); head.addEventListener('pointerup', up); head.addEventListener('pointercancel', up);
+  });
+  w.addEventListener('pointerdown', () => { w.style.zIndex = String(++floatWin.z); });
+  // 縮細／放大時保持右邊對齊（窗口通常放喺右邊）
+  w.querySelector('[data-fw=min]').onclick = () => { const right = w.offsetLeft + w.offsetWidth; w.classList.toggle('min'); store.set('fwpos-' + id, place(right - w.offsetWidth, w.offsetTop)); };
+  w.querySelector('[data-fw=fs]').onclick = () => { (document.fullscreenElement ? document.exitFullscreen() : w.requestFullscreen?.())?.catch?.(() => {}); };
+  w.querySelector('[data-fw=close]').onclick = () => { if (document.fullscreenElement === w) document.exitFullscreen().catch(() => {}); w.remove(); onClose?.(); };
+  window.addEventListener('resize', () => { if (w.isConnected) place(w.offsetLeft, w.offsetTop); });
+  return { el: w, fresh: true };
+}
+floatWin.z = 60;
+
 // ---------- 噪音計 ----------
+const noise = { stream: null, ctx: null, raf: 0 };
+function stopNoise() {
+  cancelAnimationFrame(noise.raf); noise.stream?.getTracks().forEach(t => t.stop()); noise.ctx?.close?.();
+  noise.stream = null; noise.ctx = null;
+}
 function openNoise() {
-  let stream = null; let ctx = null; let raf = 0; let loudSince = 0;
-  let threshold = store.get('noiseTh', 60);
-  const d = openDialog(`<div class="sheet-head"><h2>🔊 噪音計</h2><button class="btn ghost" data-close>✕</button></div>
+  let threshold = store.get('noiseTh', 60); let loudSince = 0;
+  const { el: d, fresh } = floatWin('fw-noise', '🔊 噪音計', `
     <div class="noise">
-      <div class="noise-face" id="nz-face">🤫</div>
-      <div class="noise-msg" id="nz-msg">撳「開始」用部機嘅咪高峰聽課室聲量</div>
-      <div class="noise-bar"><i id="nz-bar"></i><span class="noise-th" id="nz-th"></span></div>
-      <label class="field"><span>提示門檻（越低越敏感）：<b id="nz-thv" class="num">${threshold}</b></span><input type="range" id="nz-range" min="20" max="95" value="${threshold}"></label>
-      <div class="row" style="justify-content:center"><button class="btn primary" id="nz-start">開始</button><button class="btn" data-fs>全螢幕</button></div>
-      <p class="muted small" style="text-align:center;margin:0">聲音只喺部機即時分析，唔會錄音或者上載；只作畫面提示，唔會自動扣分。</p>
-    </div>`, { full: true, onClose: () => { cancelAnimationFrame(raf); stream?.getTracks().forEach(t => t.stop()); ctx?.close?.(); } });
-  const bar = $('#nz-bar', d); const face = $('#nz-face', d); const msg = $('#nz-msg', d); const th = $('#nz-th', d);
+      <div class="fw-noise-row"><div class="noise-face" id="nz-face">🤫</div>
+        <div class="noise-bar"><i id="nz-bar"></i><span class="noise-th" id="nz-th"></span></div></div>
+      <div class="noise-msg" id="nz-msg">撳「開始」用咪高峰聽課室聲量</div>
+      <label class="field fw-extra"><span class="small">提示門檻（越低越敏感）：<b id="nz-thv" class="num">${threshold}</b></span><input type="range" id="nz-range" min="20" max="95" value="${threshold}"></label>
+      <div class="fw-ctrl"><button class="btn primary sm" id="nz-start">開始</button></div>
+      <p class="muted fw-extra fw-note">聲音只喺部機即時分析，唔會錄音或上載；唔會自動扣分。</p>
+    </div>`, { onClose: stopNoise, corner: 1 });
+  if (!fresh) return;
+  const bar = $('#nz-bar', d); const face = $('#nz-face', d); const msg = $('#nz-msg', d); const th = $('#nz-th', d); const btn = $('#nz-start', d);
   const setTh = () => { th.style.left = threshold + '%'; $('#nz-thv', d).textContent = threshold; };
   setTh();
   $('#nz-range', d).oninput = (e) => { threshold = Number(e.target.value); store.set('noiseTh', threshold); setTh(); };
-  d.querySelector('[data-fs]').onclick = () => { (document.fullscreenElement ? document.exitFullscreen() : d.requestFullscreen?.())?.catch?.(() => {}); };
-  $('#nz-start', d).onclick = async (e) => {
-    if (stream) return;
+  btn.onclick = async () => {
+    if (noise.stream) { // 停止
+      stopNoise(); btn.textContent = '開始'; bar.style.width = '0%'; face.textContent = '🤫'; msg.textContent = '已停止'; d.querySelector('.noise').classList.remove('loud'); return;
+    }
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false } });
-      ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const an = ctx.createAnalyser(); an.fftSize = 1024; ctx.createMediaStreamSource(stream).connect(an);
+      noise.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false } });
+      noise.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const an = noise.ctx.createAnalyser(); an.fftSize = 1024; noise.ctx.createMediaStreamSource(noise.stream).connect(an);
       const buf = new Float32Array(an.fftSize); let level = 0;
-      e.target.textContent = '聆聽中…'; e.target.disabled = true;
+      btn.textContent = '停止';
       const loop = () => {
+        if (!d.isConnected) return stopNoise();
         an.getFloatTimeDomainData(buf);
         let sum = 0; for (const v of buf) sum += v * v;
         const db = 20 * Math.log10(Math.sqrt(sum / buf.length) || 1e-8); // 約 -100（靜）至 0（極嘈）
@@ -922,15 +970,15 @@ function openNoise() {
         const loud = level >= threshold;
         if (loud) loudSince ||= performance.now(); else loudSince = 0;
         const tooLoud = loudSince && performance.now() - loudSince > 1200;
-        d.querySelector('.noise').classList.toggle('loud', !!tooLoud);
+        d.querySelector('.noise').classList.toggle('loud', !!tooLoud); d.classList.toggle('alert', !!tooLoud);
         bar.style.background = level < threshold * 0.7 ? 'var(--mint)' : level < threshold ? 'var(--gold)' : 'var(--bad)';
         face.textContent = tooLoud ? '😣' : level < threshold * 0.7 ? '😊' : '😐';
         msg.textContent = tooLoud ? '太嘈喇！請細聲啲 🤫' : level < threshold * 0.7 ? '好安靜，好叻！' : '有少少嘈，留意聲量';
-        raf = requestAnimationFrame(loop);
+        noise.raf = requestAnimationFrame(loop);
       };
       loop();
     } catch {
-      msg.textContent = '未能使用咪高峰：請允許瀏覽器使用咪高峰（預覽頁或部分瀏覽器不支援）。';
+      stopNoise(); msg.textContent = '未能使用咪高峰：請允許瀏覽器使用咪高峰。';
     }
   };
 }
@@ -956,22 +1004,26 @@ function timerLoop() {
 }
 function paintTimer() {
   const f = $('#timer-face'); if (f) { f.textContent = mmss(timer.remain); f.classList.toggle('done', timer.done); }
-  const sb = $('#timer-start'); if (sb) sb.textContent = timer.running ? '暫停' : '開始';
+  const sb = $('#timer-start'); if (sb) sb.textContent = timer.running ? '暫停' : timer.done ? '再計' : '開始';
+  $('#fw-timer')?.classList.toggle('alert', timer.done);
+  // 窗口關咗但仍在計：右下角顯示細時間，撳一下打開
   let mini = $('.timer-mini');
-  const show = (timer.running || timer.done) && !$('#timer-face');
+  const show = (timer.running || timer.done) && !$('#fw-timer');
   if (show && !mini) { mini = document.createElement('button'); mini.className = 'timer-mini'; mini.onclick = openTimer; document.body.appendChild(mini); }
   if (mini) { if (!show) mini.remove(); else { mini.textContent = mmss(timer.remain); mini.style.color = timer.done ? 'var(--bad)' : ''; } }
 }
 function openTimer() {
   const presets = state.boot.timer_presets || [60, 180, 300, 600];
-  const d = openDialog(`<div class="sheet-head"><h2>課堂計時</h2><button class="btn ghost" data-close>✕</button></div>
+  const { el: d, fresh } = floatWin('fw-timer', '⏱ 計時', `
     <div class="timer-face" id="timer-face">${mmss(timer.remain)}</div>
-    <div class="row" style="justify-content:center">${presets.map(s => `<button class="btn" data-set="${s}">${s >= 60 ? s / 60 + ' 分鐘' : s + ' 秒'}</button>`).join('')}
-      <button class="btn" data-add="60">+1 分鐘</button></div>
-    <div class="row" style="justify-content:center"><button class="btn primary" id="timer-start" style="min-width:140px;min-height:56px;font-size:1.2rem">${timer.running ? '暫停' : '開始'}</button>
-      <button class="btn" data-reset style="min-height:56px">重設</button><button class="btn" data-fs style="min-height:56px">全螢幕</button></div>`, { full: true, onClose: paintTimer });
+    <div class="fw-presets fw-extra">${presets.map(s => `<button class="btn sm" data-set="${s}">${s >= 60 ? s / 60 + ' 分' : s + ' 秒'}</button>`).join('')}
+      <button class="btn sm" data-add="60">+1 分</button></div>
+    <div class="fw-ctrl"><button class="btn primary sm" id="timer-start">${timer.running ? '暫停' : '開始'}</button><button class="btn sm" data-reset>重設</button></div>`,
+  { onClose: paintTimer, corner: 0 });
+  paintTimer();
+  if (!fresh) return;
   d.addEventListener('click', (e) => {
-    const t = e.target;
+    const t = e.target.closest('button'); if (!t || t.dataset.fw) return;
     if (t.dataset.set) { timer.total = timer.remain = Number(t.dataset.set); timer.running = false; timer.done = false; }
     if (t.dataset.add) { timer.remain += 60; timer.total = Math.max(timer.total, timer.remain); if (timer.running) timer.endAt += 60000; timer.done = false; }
     if (t.id === 'timer-start') {
@@ -979,7 +1031,6 @@ function openTimer() {
       else { if (timer.remain <= 0) timer.remain = timer.total; timer.done = false; timer.running = true; timer.endAt = Date.now() + timer.remain * 1000; timerLoop(); }
     }
     if ('reset' in t.dataset) { timer.running = false; timer.done = false; timer.remain = timer.total; }
-    if ('fs' in t.dataset) { (document.fullscreenElement ? document.exitFullscreen() : d.requestFullscreen?.())?.catch?.(() => {}); }
     paintTimer();
   });
 }

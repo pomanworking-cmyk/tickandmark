@@ -343,10 +343,22 @@ try:
         check('分組：人數平均', sizes[-1] - sizes[0] <= 1, str(sizes))
         # 7) 噪音計（假咪高峰）
         page.click('[data-act=noise]'); page.click('#nz-start'); page.wait_for_timeout(1500)
+        check('噪音計係浮動小窗口（唔會擋住加分）', page.locator('#fw-noise').count() == 1 and page.locator('dialog[open]').count() == 0)
         nz = page.evaluate("({ w: parseFloat(document.getElementById('nz-bar').style.width) || 0, msg: document.getElementById('nz-msg').textContent })")
         page.screenshot(path=f'{OUT}/noise.png')
         check('噪音計：讀到咪高峰聲量', nz['w'] > 0 and '未能使用' not in nz['msg'], str(nz))
-        page.click('dialog [data-close]')
+        # 計時小窗口：開住計時同時可以撳學生加分
+        page.click('[data-act=timer]'); page.click('#fw-timer [data-set="60"]'); page.click('#timer-start'); page.wait_for_timeout(1300)
+        t_txt = page.inner_text('#timer-face')
+        page.click('.qchip[data-q="d:1"]'); page.locator('#room-grid .stu:not(.absent)').first.click(position={'x': 20, 'y': 12}); page.wait_for_selector('.cele-card', timeout=8000)
+        check('計時中仍可撳學生加分', t_txt in ('00:59', '00:58') and page.inner_text('#timer-face') != '01:00', t_txt)
+        page.keyboard.press('Escape'); page.wait_for_timeout(300)
+        page.click('#fw-timer [data-fw=min]'); check('計時窗口可縮細', 'min' in page.get_attribute('#fw-timer', 'class'))
+        page.click('#fw-timer [data-fw=close]'); page.wait_for_timeout(400)
+        check('關閉窗口後仍在計，右下角顯示細時間', page.locator('.timer-mini').count() == 1)
+        page.click('.timer-mini'); page.click('#timer-start'); page.click('#fw-timer [data-reset]'); page.click('#fw-timer [data-fw=close]')
+        page.click('.qchip[data-q="menu"]') if page.locator('.qchip[data-q="menu"]').count() else None
+        page.click('#fw-noise [data-fw=close]')
         api(page, 'PUT', f"/classes/{ids['4B']}/attendance", {'date': att['date'], 'absent': []})
 
         # 隨機加分令各班處於不同階段，然後逐頁核對

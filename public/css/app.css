@@ -622,3 +622,45 @@ body:has(.selbar) .toasts { bottom: calc(96px + env(safe-area-inset-bottom, 0px)
 
 /* 學生名單：姓名、標題唔好逐個字斷行（窄螢幕可左右捲動表格） */
 .stu-table th, .stu-table td:nth-child(4), .stu-table td:nth-child(7) { white-space: nowrap; }
+
+/* ---------- 浮動小窗口（計時、噪音計） ---------- */
+.fw { position: fixed; width: 236px; background: var(--surface, #fff); border: 2px solid var(--accent); border-radius: 22px; box-shadow: 0 10px 30px rgba(242, 122, 155, .25); overflow: hidden; touch-action: none; }
+.fw-head { display: flex; align-items: center; gap: 2px; padding: 6px 6px 6px 12px; background: linear-gradient(90deg, #ffe3ec, #fff1f5); cursor: grab; user-select: none; touch-action: none; }
+.fw-head:active { cursor: grabbing; }
+.fw-title { flex: 1; font-weight: 800; font-size: .9rem; white-space: nowrap; }
+.fw-btn { width: 28px; height: 28px; border: none; border-radius: 50%; background: rgba(255,255,255,.8); color: var(--ink); font-size: .85rem; cursor: pointer; display: grid; place-items: center; }
+.fw-btn:hover { background: #fff; }
+.fw-body { padding: 10px 12px 12px; display: grid; gap: 8px; touch-action: auto; }
+.fw .timer-face { font-size: 3rem; }
+.fw-presets { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; }
+.fw-presets .btn { min-height: 30px; padding: 2px 9px; font-size: .8rem; }
+.fw-ctrl { display: flex; gap: 6px; justify-content: center; }
+.fw-ctrl .btn { min-height: 36px; min-width: 70px; }
+.fw .noise { gap: 8px; width: 100%; }
+.fw-noise-row { display: flex; align-items: center; gap: 8px; width: 100%; }
+.fw .noise-face { font-size: 2.2rem; }
+.fw .noise-bar { height: 20px; flex: 1; border-width: 2px; }
+.fw .noise-msg { font-size: .95rem; }
+.fw .noise .field { gap: 2px; }
+.fw-note { font-size: .72rem; margin: 0; text-align: center; }
+/* 縮細：只剩時間／聲量條及主要按鈕 */
+.fw.min { width: 172px; }
+.fw.min .fw-extra, .fw.min [data-fw=fs] { display: none; }
+.fw.min .fw-body { padding: 6px 10px 8px; gap: 4px; }
+.fw.min .timer-face { font-size: 2.1rem; }
+.fw.min .noise-msg { font-size: .78rem; }
+.fw.min .fw-title { font-size: .8rem; }
+.fw.alert { border-color: var(--bad); animation: fw-pulse .9s ease-in-out infinite; }
+@keyframes fw-pulse { 50% { box-shadow: 0 0 0 8px rgba(255, 107, 107, .25); } }
+/* 全螢幕（投影給全班睇） */
+.fw:fullscreen { width: 100vw; height: 100vh; border: none; border-radius: 0; display: grid; grid-template-rows: auto 1fr; background: var(--bg, #fff8fb); }
+.fw:fullscreen .fw-body { place-content: center; justify-items: center; gap: 28px; }
+.fw:fullscreen .timer-face { font-size: clamp(6rem, 24vw, 18rem); }
+.fw:fullscreen .fw-presets .btn, .fw:fullscreen .fw-ctrl .btn { font-size: 1.2rem; min-height: 52px; padding: 6px 20px; }
+.fw:fullscreen .noise { width: min(900px, 90vw); gap: 26px; }
+.fw:fullscreen .fw-noise-row { flex-direction: column; gap: 26px; }
+.fw:fullscreen .noise-face { font-size: clamp(6rem, 22vw, 12rem); }
+.fw:fullscreen .noise-bar { width: 100%; height: 40px; flex: none; }
+.fw:fullscreen .noise-msg { font-size: clamp(1.6rem, 4vw, 2.6rem); }
+.fw:fullscreen .fw-note { font-size: .9rem; }
+@media print { .fw, .timer-mini { display: none !important; } }
