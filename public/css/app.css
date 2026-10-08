@@ -664,3 +664,82 @@ body:has(.selbar) .toasts { bottom: calc(96px + env(safe-area-inset-bottom, 0px)
 .fw:fullscreen .noise-msg { font-size: clamp(1.6rem, 4vw, 2.6rem); }
 .fw:fullscreen .fw-note { font-size: .9rem; }
 @media print { .fw, .timer-mini { display: none !important; } }
+
+/* ---------- 學生及分組（重新設計） ---------- */
+.stu-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 14px; align-items: start; }
+.stu-side { position: sticky; top: 12px; }
+@media (max-width: 900px) { .stu-layout { grid-template-columns: 1fr; } .stu-side { position: static; } }
+.hint { color: var(--muted); font-size: .85rem; margin: 8px 0 0; line-height: 1.5; }
+
+.imp-tabs { display: flex; gap: 4px; padding: 4px; background: var(--surface-2); border: 1.5px solid var(--line); border-radius: 999px; margin: 4px 0 14px; }
+.imp-tab { flex: 1; border: none; background: transparent; border-radius: 999px; padding: 8px 6px; font: inherit; font-weight: 700; font-size: .9rem; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.imp-tab[aria-selected=true] { background: #fff; color: var(--ink); box-shadow: 0 2px 8px rgba(242, 122, 155, .18); }
+
+.upload-zone { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 26px 16px; border: 2.5px dashed var(--line); border-radius: 22px; background: var(--surface-2); text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
+.upload-zone:hover, .upload-zone.over { border-color: var(--accent); background: var(--accent-soft); }
+.uz-icon { font-size: 2.2rem; line-height: 1; }
+.uz-title { font-weight: 800; font-size: 1.05rem; }
+.uz-sub { color: var(--muted); font-size: .85rem; }
+.uz-btn { margin-top: 8px; pointer-events: none; }
+#ocr-progress { margin-top: 10px; }
+
+.imp-text { width: 100%; min-height: 150px; resize: vertical; line-height: 1.7; font-size: 1rem; }
+.imp-foot { display: flex; align-items: center; gap: 10px; justify-content: space-between; margin-top: 10px; flex-wrap: wrap; }
+.imp-foot .hint { margin: 0; flex: 1 1 200px; }
+
+.one-form { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+.one-form .field { margin: 0; }
+.one-btn { min-height: 44px; }
+
+.review-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.review-cols, .review-row { display: grid; grid-template-columns: 24px 70px minmax(0, 1fr) 78px; gap: 8px; align-items: center; }
+.review-cols { font-size: .78rem; font-weight: 700; color: var(--muted); padding: 10px 10px 4px; }
+.review-list { display: grid; gap: 6px; max-height: 420px; overflow-y: auto; padding: 2px; }
+.review-row { padding: 6px 10px; border-radius: 14px; background: var(--surface-2); }
+.review-row .input { min-height: 38px; padding: 6px 10px; width: 100%; }
+.review-row input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent-strong); }
+.review-row.dup { background: var(--gold-soft); }
+.review-row.off { opacity: .45; }
+.dup-tag { grid-column: 2 / -1; font-size: .78rem; color: #8a6400; font-weight: 700; }
+.review-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; position: sticky; bottom: 0; background: var(--surface); padding-top: 8px; }
+
+.slist-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.slist-top h2 { margin: 0 auto 0 0; }
+.sel-all { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: .9rem; cursor: pointer; }
+.sel-all input, .srow input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent-strong); }
+.slist { display: grid; gap: 6px; }
+.srow { display: grid; grid-template-columns: 22px 30px 40px minmax(0, 1fr) 150px auto; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 16px; border: 1.5px solid var(--line); background: #fff; }
+.srow:hover { border-color: var(--accent); }
+.srow .avatar { --size: 40px; }
+.sno { text-align: center; font-weight: 800; color: var(--muted); }
+.sinfo { display: grid; min-width: 0; }
+.sname { font-weight: 800; color: var(--ink); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sname:hover { color: var(--accent-strong); text-decoration: underline; }
+.smeta { font-size: .78rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sgroup { min-height: 36px; padding: 4px 10px; width: 100%; }
+.sacts { display: flex; gap: 6px; }
+.icon-btn { gap: 4px; }
+@media (max-width: 600px) {
+  .srow { grid-template-columns: 22px 26px 40px minmax(0, 1fr) auto; row-gap: 6px; }
+  .srow .sgroup { grid-column: 4 / 6; grid-row: 2; }
+  .icon-btn .lbl { display: none; }
+  .icon-btn { width: 36px; padding: 0; justify-content: center; }
+  .one-form { grid-template-columns: 74px minmax(0, 1fr); }
+  .one-btn { grid-column: 1 / -1; }
+  .review-cols, .review-row { grid-template-columns: 22px 54px minmax(0, 1fr) 58px; gap: 6px; }
+  .imp-tab { font-size: .82rem; padding: 8px 4px; }
+}
+
+.grow-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 14px; border: 1.5px solid var(--line); background: #fff; }
+.gname { flex: 1; font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gcolor { width: 34px; height: 34px; border: none; background: none; padding: 0; cursor: pointer; flex: none; }
+.group-form { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+.group-form .input { flex: 1; min-width: 0; }
+.edit-grid { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 10px; }
+
+/* ---------- 座位表：老師視角（講台喺下面） ---------- */
+.seat-board .front { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.seat-board .front.bottom { margin: 14px auto 0; border-radius: 22px 22px 0 0; }
+.flip-btn { border: none; background: rgba(255,255,255,.7); color: #2d6b52; border-radius: 999px; font: inherit; font-size: .75rem; font-weight: 800; letter-spacing: 0; padding: 2px 10px; cursor: pointer; }
+.flip-btn:hover { background: #fff; }
+@media (max-width: 600px) { .srow > span:empty { display: none; } }

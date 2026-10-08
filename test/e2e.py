@@ -106,11 +106,25 @@ try:
         check('Big5 CSV 正確解碼中文', first == names4b[0], first)
         page.click('text=確認匯入'); page.wait_for_selector('text=已匯入 10 位學生')
         # 貼上名單
-        goto(page, BASE + f"#/c/{ids['6C']}/students"); page.wait_for_selector('#imp-text', state='attached')
-        page.click('summary:has-text("貼上")'); page.fill('#imp-text', '1. 葉朗峰\n2 方采盈 8\n3、雷俊言\n4 姚樂怡\n5 歐陽子晴')
+        goto(page, BASE + f"#/c/{ids['6C']}/students"); page.wait_for_selector('[data-tab=paste]')
+        page.click('[data-tab=paste]'); page.fill('#imp-text', '1. 葉朗峰\n2 方采盈 8\n3、雷俊言\n4 姚樂怡\n5 歐陽子晴')
         page.click('text=讀取名單'); page.wait_for_selector('text=確認匯入')
         check('貼上名單讀到 5 位（含複姓）', page.locator('[data-k=name]').count() == 5)
         page.click('text=確認匯入'); page.wait_for_selector('text=已匯入 5 位學生')
+        # 逐個加入：班號自動加一，可連續輸入
+        page.click('[data-tab=one]'); page.fill('#a1-no', '6'); page.fill('#a1-name', '何小東'); page.press('#a1-name', 'Enter')
+        page.wait_for_selector('text=已加入 何小東'); wait_js(page, "document.getElementById('a1-no')?.value === '7'")
+        check('逐個加入：加入後班號自動加一', page.locator('.srow .sname:has-text("何小東")').count() == 1)
+        del_id = [x for x in api(page, 'GET', f"/classes/{ids['6C']}/full")['students'] if x['name'] == '何小東'][0]['id']
+        page.once('dialog', lambda d: d.accept())
+        page.click(f'[data-act=delstu][data-id="{del_id}"]'); page.click('dialog button:has-text("刪除")'); wait_js(page, "!document.querySelector('.srow .sname') || ![...document.querySelectorAll('.srow .sname')].some(e => e.textContent === '何小東')")
+        # 座位表：預設老師視角（講台喺下面），可以轉返學生視角
+        goto(page, BASE + f"#/c/{ids['6C']}/room"); page.wait_for_selector('.seat-board .front')
+        fb = page.evaluate("(() => { const b = document.querySelector('.seat-board'); return [b.lastElementChild.classList.contains('front'), [...document.querySelectorAll('.seats .stu')].map(e => e.dataset.id)]; })()")
+        page.click('[data-act=seatflip]'); page.wait_for_timeout(200)
+        fa = page.evaluate("(() => { const b = document.querySelector('.seat-board'); return [b.firstElementChild.classList.contains('front'), [...document.querySelectorAll('.seats .stu')].map(e => e.dataset.id)]; })()")
+        check('座位表：老師視角講台喺下面，可切換', fb[0] and fa[0] and fb[1][::-1] == fa[1][:len(fb[1])] or (fb[0] and fa[0] and sorted(fb[1]) == sorted(fa[1])), str(fb) + str(fa))
+        page.click('[data-act=seatflip]')
 
         old = api(page, 'GET', f"/classes/{ids['4A']}/full")
         check('舊分數保留', [s['score'] for s in old['students']] == [(i * 5) % 17 for i in range(12)])
@@ -171,7 +185,7 @@ try:
 
         # 扣分不倒退
         before = by4b[bear['id']]['pet']
-        page.locator('.stu').first.click(); page.wait_for_selector('dialog .tag-grid'); page.click('dialog .quick [data-d="-2"]')
+        page.click(f'.stu[data-id="{bear["id"]}"]', position={'x': 20, 'y': 12}); page.wait_for_selector('dialog .tag-grid'); page.click('dialog .quick [data-d="-2"]')
         page.wait_for_selector('.celebrate.minus .cele-card')
         minus = page.eval_on_selector('.celebrate.minus', "e => ({ d: e.querySelector('.delta').textContent, sp: e.querySelector('.avatar').dataset.species, st: e.querySelector('.avatar').dataset.stage })")
         after = api(page, 'GET', f"/students/{bear['id']}")['student']['pet']

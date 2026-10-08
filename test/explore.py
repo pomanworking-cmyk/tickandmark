@@ -93,7 +93,7 @@ with sync_playwright() as p:
         crawl(pg, BASE + f'#/c/{cid}/room', f'{vp_name}-empty-room')
         # 貼上名單
         goto(pg, BASE + f'#/c/{cid}/students')
-        pg.click('summary:has-text("貼上")'); pg.fill('#imp-text', '\n'.join(f'{i+1} 學生{i+1:02d}' for i in range(28)))
+        pg.click('[data-tab=paste]'); pg.fill('#imp-text', '\n'.join(f'{i+1} 學生{i+1:02d}' for i in range(28)))
         pg.click('text=讀取名單'); pg.wait_for_selector('text=確認匯入'); pg.click('text=確認匯入'); idle(pg); pg.wait_for_timeout(800)
         shot(pg, f'{vp_name}-students')
         # 全班派蛋

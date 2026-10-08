@@ -385,6 +385,7 @@ function renderRoom() {
   if (matchMedia('(pointer:fine)').matches) search.focus();
 
   ACT.size = (el) => { room.size = el.dataset.v; store.set('size', room.size); $$('[data-act=size]').forEach(b => b.setAttribute('aria-pressed', b === el)); drawRoomGrid(); };
+  ACT.seatflip = () => { store.set('seatFlip', !store.get('seatFlip', true)); drawRoomGrid(); };
   ACT.multi = (el) => { if (room.edit) return; room.multi = !room.multi; if (!room.multi) room.sel.clear(); el.setAttribute('aria-pressed', room.multi); drawRoomGrid(); };
   ACT.quick = (el) => { room.quick = el.dataset.q; store.set('quick', room.quick); drawQuickBar(); };
   ACT.all = () => { const ids = present().map(s => s.id); if (!ids.length) return toast('今日全班缺席？請檢查點名'); pointSheet(ids); };
@@ -580,12 +581,16 @@ function drawRoomGrid() {
     const at = new Map([...pos].map(([id, p]) => [`${p[0]},${p[1]}`, id]));
     const byId = new Map(students().map(s => [s.id, s]));
     const totalRows = rows + (room.edit ? 1 : 0); let cells = '';
-    for (let r = 0; r < totalRows; r++) for (let c = 0; c < cols; c++) {
+    // 老師視角（預設）：企喺講台望落去，第一行喺最下面、左右亦對調；學生視角：講台喺上面
+    const flip = store.get('seatFlip', true);
+    const order = (n) => { const a = [...Array(n).keys()]; return flip ? a.reverse() : a; };
+    for (const r of order(totalRows)) for (const c of order(cols)) {
       const sid = at.get(`${r},${c}`);
       cells += sid ? stuCard(byId.get(sid), [r, c]) : `<div class="seat-empty" data-act="seatcell" data-r="${r}" data-c="${c}" aria-label="空位"></div>`;
     }
+    const front = `<div class="front${flip ? ' bottom' : ''}">講台 · 白板<button class="flip-btn" data-act="seatflip" title="${flip ? '轉做學生視角（講台喺上面）' : '轉做老師視角（講台喺下面）'}">⇅ ${flip ? '老師視角' : '學生視角'}</button></div>`;
     grid.className = `seat-scroll size-${room.size}`;
-    grid.innerHTML = `<div class="seat-board" style="--cols:${cols}"><div class="front">講台 · 白板</div><div class="seats${room.edit ? ' editing' : ''}">${cells}</div></div>`;
+    grid.innerHTML = `<div class="seat-board" style="--cols:${cols}">${flip ? '' : front}<div class="seats${room.edit ? ' editing' : ''}">${cells}</div>${flip ? front : ''}</div>`;
   } else {
     const list = filteredStudents();
     grid.className = `students-grid size-${room.size}`;
@@ -1044,73 +1049,111 @@ function renderStudents() {
   for (const id of [...stuSel.ids]) if (!list.some(s => s.id === id)) stuSel.ids.delete(id);
   const rows = state.importRows;
   const existing = new Set(list.map(s => s.name));
+  const tab = state.impTab || 'file';
+  const nOn = rows.filter(r => r.on !== false && String(r.name).trim()).length;
+  const tabBtn = (k, l) => `<button class="imp-tab" role="tab" data-act="imptab" data-tab="${k}" aria-selected="${tab === k}">${l}</button>`;
   shell('students', `
     <div class="page-head"><h1>${esc(state.cls.class.name)} 學生及分組</h1><span class="chip">${list.length} 位學生</span></div>
-    <div class="grid-2">
-      <section class="panel">
-        <h2>匯入學生名單</h2>
-        <label class="drop" id="drop">
-          <input type="file" id="imp-file" accept=".xlsx,.csv,.txt,image/*" hidden>
-          <strong>上載 Excel／CSV 或名單相片</strong><br><span class="muted small">Excel 第一行可有「班號、姓名、分數」標題；相片會在你的裝置內辨識文字，不會上載。</span>
-        </label>
-        <div id="ocr-progress" hidden style="margin-top:10px"><div class="muted small">正在辨識相片文字…</div><div class="progress"><i></i></div></div>
-        <details style="margin-top:12px"><summary class="btn ghost sm">或直接貼上名單</summary>
-          <textarea class="input" id="imp-text" placeholder="每行一位，例如：&#10;1 陳大文&#10;2 李小明 15"></textarea>
-          <button class="btn sm" data-act="parsetext" style="margin-top:8px">讀取名單</button></details>
-        ${rows.length ? `<div style="margin-top:14px"><div class="row" style="align-items:center"><h3 style="margin-right:auto">核對 ${rows.length} 位學生</h3>
-          <button class="btn sm" data-act="clearimp">清除</button><button class="btn primary sm" data-act="doimport">確認匯入</button></div>
-          <p class="muted small">可直接修改；「舊分數」會原數保留，但不會變成寵物 XP。橙色表示班內已有同名學生。</p>
-          <div class="table-wrap"><table><thead><tr><th>匯入</th><th>班號</th><th>姓名</th><th>舊分數</th></tr></thead><tbody>
-          ${rows.map((r, i) => `<tr${existing.has(r.name) ? ' style="background:var(--gold-soft)"' : ''}><td><input type="checkbox" data-imp="${i}" data-k="on" ${r.on !== false ? 'checked' : ''} aria-label="匯入"></td>
-            <td><input class="input num" style="width:70px" data-imp="${i}" data-k="number" value="${esc(r.number)}" aria-label="班號"></td>
-            <td><input class="input" data-imp="${i}" data-k="name" value="${esc(r.name)}" aria-label="姓名"></td>
-            <td><input class="input num" style="width:80px" data-imp="${i}" data-k="score" value="${esc(r.score)}" aria-label="舊分數"></td></tr>`).join('')}
-          </tbody></table></div></div>` : ''}
+    <div class="stu-layout">
+    <div class="stu-main">
+      <section class="panel add-panel">
+        <h2>加入學生</h2>
+        ${rows.length ? `
+        <div class="review">
+          <div class="review-head"><div><b>核對名單</b> <span class="muted small">共 ${rows.length} 位，已剔選 <b id="imp-n">${nOn}</b> 位</span></div></div>
+          <p class="hint">可以直接改班號或姓名。「舊分數」會保留喺總分，但唔會變成寵物 XP。</p>
+          <div class="review-cols" aria-hidden="true"><span></span><span>班號</span><span>姓名</span><span>舊分數</span></div>
+          <div class="review-list">
+          ${rows.map((r, i) => `<div class="review-row${existing.has(r.name) ? ' dup' : ''}">
+            <input type="checkbox" data-imp="${i}" data-k="on" ${r.on !== false ? 'checked' : ''} aria-label="匯入">
+            <input class="input num" data-imp="${i}" data-k="number" value="${esc(r.number)}" inputmode="numeric" aria-label="班號">
+            <input class="input" data-imp="${i}" data-k="name" value="${esc(r.name)}" aria-label="姓名">
+            <input class="input num" data-imp="${i}" data-k="score" value="${esc(r.score)}" inputmode="numeric" placeholder="0" aria-label="舊分數">
+            ${existing.has(r.name) ? '<span class="dup-tag">⚠️ 班內已有同名學生</span>' : ''}</div>`).join('')}
+          </div>
+          <div class="review-actions"><button class="btn" data-act="clearimp">取消</button><button class="btn primary" data-act="doimport">確認匯入 <span id="imp-n2">${nOn}</span> 位</button></div>
+        </div>` : `
+        <div class="imp-tabs" role="tablist">${tabBtn('file', '📄 Excel／相片')}${tabBtn('paste', '📋 貼上名單')}${tabBtn('one', '✏️ 逐個加入')}</div>
+        ${tab === 'file' ? `
+          <label class="upload-zone" id="drop">
+            <input type="file" id="imp-file" accept=".xlsx,.csv,.txt,image/*" hidden>
+            <span class="uz-icon">📄</span>
+            <span class="uz-title">揀選或拖放名單檔案</span>
+            <span class="uz-sub">Excel（.xlsx）、CSV，或者影低嘅名單相片</span>
+            <span class="btn primary sm uz-btn">選擇檔案</span>
+          </label>
+          <p class="hint">Excel 第一行可以係「班號、姓名、分數」標題。相片會喺你部機辨識文字，唔會上載。</p>
+          <div id="ocr-progress" hidden><div class="hint">正在辨識相片文字…</div><div class="progress"><i></i></div></div>`
+        : tab === 'paste' ? `
+          <textarea class="input imp-text" id="imp-text" rows="7" placeholder="每行一位學生，例如：&#10;1 陳大文&#10;2 李小明&#10;3 黃美玲 15　← 後面嘅數字係舊分數（可以唔填）">${esc(state.pasteText || '')}</textarea>
+          <div class="imp-foot"><span class="hint">可以直接由 Excel、Word 或 WhatsApp 複製貼上。</span><button class="btn primary" data-act="parsetext">讀取名單</button></div>`
+        : `
+          <form class="one-form" data-form="addone">
+            <label class="field one-no"><span>班號</span><input class="input num" id="a1-no" name="number" type="number" min="1" max="99" inputmode="numeric"></label>
+            <label class="field one-name"><span>姓名</span><input class="input" id="a1-name" name="name" required maxlength="40" placeholder="學生姓名" autocomplete="off"></label>
+            <button class="btn primary one-btn">加入</button>
+          </form>
+          <p class="hint">加入後會留喺呢度，可以繼續輸入下一位。</p>`}`}
       </section>
-      <section class="panel">
-        <h2>小組</h2>
-        <div class="stack" style="gap:8px">${groups.map(g => `<div class="status-row" style="--gc:${esc(g.color)}">
-          <input type="color" value="${esc(g.color)}" data-gcolor="${g.id}" aria-label="顏色" style="width:36px;height:32px;border:none;background:none">
-          <span class="who">${esc(g.name)} <span class="muted small">${list.filter(s => s.group_id === g.id).length} 人</span></span>
-          <button class="btn sm" data-act="renamegroup" data-id="${g.id}">改名</button><button class="btn sm danger" data-act="delgroup" data-id="${g.id}">刪除</button></div>`).join('') || '<p class="muted">未有小組。建立後在下表為學生選擇小組。</p>'}</div>
-        <form class="row" data-form="newgroup" style="margin-top:12px"><label class="field"><span>新小組名稱</span><input class="input" id="ng-name" name="name" maxlength="20" required placeholder="例如：藍鯨隊"></label>
-          <input type="color" name="color" value="#8cc4f5" aria-label="顏色" style="width:44px;height:40px;border:none;background:none"><button class="btn blue">新增</button></form>
+
+      <section class="panel" style="margin-top:14px">
+        <div class="slist-top"><h2>學生名單</h2>
+          ${list.length ? `<label class="sel-all"><input type="checkbox" id="ssel-all"> 全選</label>
+          <span class="muted small" id="ssel-count">已選 ${stuSel.ids.size} 位</span>
+          <button class="btn sm danger" data-act="delsel" id="ssel-del"${stuSel.ids.size ? '' : ' disabled'}>🗑 刪除已選</button>` : ''}</div>
+        ${list.length ? `<div class="slist">${list.map(s => `<div class="srow">
+            <input type="checkbox" data-ssel="${s.id}" aria-label="選擇 ${esc(s.name)}"${stuSel.ids.has(s.id) ? ' checked' : ''}>
+            <span class="sno num">${s.number ?? '–'}</span>
+            ${avatar(s, 40)}
+            <div class="sinfo"><a class="sname" href="#/s/${s.id}">${esc(s.name)}</a><span class="smeta">${s.score} 分 · ${esc(petLabel(s.pet))}</span></div>
+            ${groups.length ? `<select class="input sgroup" data-sgroup="${s.id}" aria-label="小組"><option value="">未分組</option>${groups.map(g => `<option value="${g.id}"${g.id === s.group_id ? ' selected' : ''}>${esc(g.name)}</option>`).join('')}</select>` : '<span></span>'}
+            <div class="sacts"><button class="btn sm icon-btn" data-act="editstu" data-id="${s.id}" aria-label="編輯">✏️<span class="lbl">編輯</span></button><button class="btn sm danger icon-btn" data-act="delstu" data-id="${s.id}" aria-label="刪除">🗑<span class="lbl">刪除</span></button></div>
+          </div>`).join('')}</div>`
+        : '<div class="empty"><strong>未有學生</strong>用上面「加入學生」匯入全班名單。</div>'}
       </section>
     </div>
-    <section class="panel" style="margin-top:14px">
-      <div class="row" style="align-items:center;margin-bottom:8px"><h2 style="margin:0 auto 0 0">學生名單</h2>
-        ${list.length ? `<span class="muted small" id="ssel-count">已選 ${stuSel.ids.size} 位</span>
-        <button class="btn sm danger" data-act="delsel" id="ssel-del"${stuSel.ids.size ? '' : ' disabled'}>🗑 刪除已選</button>` : ''}</div>
-      ${list.length ? `<div class="table-wrap"><table class="stu-table"><thead><tr><th><input type="checkbox" id="ssel-all" aria-label="全選"${stuSel.ids.size && stuSel.ids.size === list.length ? ' checked' : ''}></th><th class="num">班號</th><th></th><th>姓名</th><th>小組</th><th class="num">分數</th><th>寵物</th><th></th></tr></thead><tbody>
-      ${list.map(s => `<tr><td><input type="checkbox" data-ssel="${s.id}" aria-label="選擇 ${esc(s.name)}"${stuSel.ids.has(s.id) ? ' checked' : ''}></td><td class="num">${s.number ?? ''}</td><td>${avatar(s, 44)}</td><td><a href="#/s/${s.id}">${esc(s.name)}</a></td>
-        <td><select class="input" style="width:auto;min-height:34px" data-sgroup="${s.id}" aria-label="小組"><option value="">—</option>${groups.map(g => `<option value="${g.id}"${g.id === s.group_id ? ' selected' : ''}>${esc(g.name)}</option>`).join('')}</select></td>
-        <td class="num">${s.score}</td><td class="small">${esc(petLabel(s.pet))}</td>
-        <td style="white-space:nowrap"><button class="btn sm" data-act="editstu" data-id="${s.id}">編輯</button> <button class="btn sm danger" data-act="delstu" data-id="${s.id}">刪除</button></td></tr>`).join('')}
-      </tbody></table></div>` : '<div class="empty"><strong>未有學生</strong>用上面的匯入工具加入全班名單。</div>'}
-      <form class="row" data-form="addone" style="margin-top:12px"><label class="field" style="flex:0 0 90px"><span>班號</span><input class="input num" id="a1-no" name="number" type="number" min="1" max="99"></label>
-        <label class="field"><span>逐個加入學生</span><input class="input" id="a1-name" name="name" required maxlength="40" placeholder="學生姓名"></label><button class="btn">加入</button></form>
-    </section>`);
+
+      <section class="panel stu-side">
+        <h2>小組</h2>
+        <div class="stack" style="gap:8px">${groups.map(g => `<div class="grow-row" style="--gc:${esc(g.color)}">
+          <input type="color" value="${esc(g.color)}" data-gcolor="${g.id}" aria-label="顏色" class="gcolor">
+          <span class="gname">${esc(g.name)} <span class="muted small">${list.filter(s => s.group_id === g.id).length} 人</span></span>
+          <button class="btn sm" data-act="renamegroup" data-id="${g.id}">改名</button><button class="btn sm danger" data-act="delgroup" data-id="${g.id}">刪除</button></div>`).join('') || '<p class="hint">未有小組。建立後，喺學生名單揀小組。</p>'}</div>
+        <form class="group-form" data-form="newgroup"><input class="input" id="ng-name" name="name" maxlength="20" required placeholder="新小組名稱，例如：藍鯨隊" aria-label="新小組名稱">
+          <input type="color" name="color" value="#8cc4f5" aria-label="顏色" class="gcolor"><button class="btn blue">新增</button></form>
+      </section>
+    </div>`);
 
   const fileIn = $('#imp-file'); const drop = $('#drop');
+  ACT.imptab = (el) => { state.impTab = el.dataset.tab; renderStudents(); (state.impTab === 'paste' ? $('#imp-text') : state.impTab === 'one' ? $('#a1-name') : null)?.focus(); };
   const handleFile = async (file) => {
     if (!file) return;
     try {
       if (file.type.startsWith('image/')) {
         const box = $('#ocr-progress'); box.hidden = false;
         const text = await ocrImage(file, (p) => { box.querySelector('i').style.width = Math.round(p * 100) + '%'; });
-        box.hidden = true; $('#imp-text').value = text; $('#imp-text').closest('details').open = true;
+        box.hidden = true; state.pasteText = text;
         state.importRows = textToStudents(text);
-        if (!state.importRows.length) return toast('相片中找不到學生姓名，請在文字框修改後按「讀取名單」', { error: true });
+        if (!state.importRows.length) { state.impTab = 'paste'; renderStudents(); return toast('相片中找不到學生姓名，請喺文字框修改後按「讀取名單」', { error: true }); }
       } else state.importRows = await readFileToStudents(file);
       if (!state.importRows.length) return toast('檔案中找不到「姓名」欄', { error: true });
       toast(`讀到 ${state.importRows.length} 位學生，請核對`); renderStudents();
     } catch (e) { $('#ocr-progress').hidden = true; toast(e.message, { error: true }); }
   };
-  fileIn.onchange = () => handleFile(fileIn.files[0]);
-  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
-  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-  drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); handleFile(e.dataTransfer.files[0]); });
-  app.oninput = (e) => { const i = e.target.dataset.imp; if (i !== undefined) state.importRows[i][e.target.dataset.k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value; };
+  if (fileIn) {
+    fileIn.onchange = () => handleFile(fileIn.files[0]);
+    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+    drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); handleFile(e.dataTransfer.files[0]); });
+  }
+  app.oninput = (e) => {
+    if (e.target.id === 'imp-text') { state.pasteText = e.target.value; return; }
+    const i = e.target.dataset.imp; if (i === undefined) return;
+    state.importRows[i][e.target.dataset.k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+    const n = state.importRows.filter(r => r.on !== false && String(r.name).trim()).length;
+    if ($('#imp-n')) $('#imp-n').textContent = n; if ($('#imp-n2')) $('#imp-n2').textContent = n;
+    if (e.target.type === 'checkbox') e.target.closest('.review-row')?.classList.toggle('off', !e.target.checked);
+  };
   const syncSel = () => {
     const n = stuSel.ids.size; const c = $('#ssel-count'); if (c) c.textContent = `已選 ${n} 位`;
     const b = $('#ssel-del'); if (b) b.disabled = !n;
@@ -1134,19 +1177,31 @@ function renderStudents() {
     const pick = state.importRows.filter(r => r.on !== false && String(r.name).trim());
     if (!pick.length) return toast('沒有選擇任何學生', { error: true });
     const r = await POST(`/classes/${state.classId}/students`, { students: pick.map(({ number, name, score }) => ({ number, name, score })) });
-    state.importRows = []; await reloadClass(); await reloadBoot();
+    state.importRows = []; state.pasteText = ''; await reloadClass(); await reloadBoot();
     toast(`已匯入 ${r.created.length} 位學生。可到「寵物」頁派蛋。`); renderStudents();
   };
   ACT['submit:newgroup'] = async (f, fd) => { await POST(`/classes/${state.classId}/groups`, Object.fromEntries(fd)); await reloadClass(); renderStudents(); };
-  ACT['submit:addone'] = async (f, fd) => { await POST(`/classes/${state.classId}/students`, { students: [Object.fromEntries(fd)] }); await reloadClass(); await reloadBoot(); renderStudents(); };
+  ACT['submit:addone'] = async (f, fd) => {
+    const st = Object.fromEntries(fd);
+    await POST(`/classes/${state.classId}/students`, { students: [st] }); await reloadClass(); await reloadBoot();
+    toast(`已加入 ${st.name}`); renderStudents();
+    // 方便連續輸入：班號自動加一，游標回到姓名
+    const no = $('#a1-no'); if (no && st.number) no.value = Number(st.number) + 1; $('#a1-name')?.focus();
+  };
   ACT.renamegroup = (el) => editDialog('小組名稱', groups.find(g => g.id === Number(el.dataset.id)).name, async (v) => { await PATCH(`/groups/${el.dataset.id}`, { name: v }); await reloadClass(); renderStudents(); });
   ACT.delgroup = async (el) => { if (await confirmBox('刪除此小組？組員的分數不受影響。', { ok: '刪除', danger: true })) { await DEL(`/groups/${el.dataset.id}`); await reloadClass(); renderStudents(); } };
   ACT.editstu = (el) => {
     const s = list.find(x => x.id === Number(el.dataset.id));
     const d = openDialog(`<div class="sheet-head"><h2>編輯學生</h2><button class="btn ghost" data-close>✕</button></div>
-      <form class="stack" data-f><label class="field"><span>班號</span><input class="input num" id="es-no" name="number" type="number" value="${s.number ?? ''}"></label>
-      <label class="field"><span>姓名</span><input class="input" id="es-name" name="name" required maxlength="40" value="${esc(s.name)}"></label><button class="btn primary">儲存</button></form>`);
-    d.querySelector('[data-f]').onsubmit = async (e) => { e.preventDefault(); try { await PATCH(`/students/${s.id}`, Object.fromEntries(new FormData(e.target))); d.close(); await reloadClass(); renderStudents(); } catch (err) { fail(err); } };
+      <form class="stack" data-f>
+        <div class="edit-grid"><label class="field"><span>班號</span><input class="input num" id="es-no" name="number" type="number" inputmode="numeric" value="${s.number ?? ''}"></label>
+        <label class="field"><span>姓名</span><input class="input" id="es-name" name="name" required maxlength="40" value="${esc(s.name)}"></label></div>
+        ${groups.length ? '' : '<!--'}<label class="field"><span>小組</span><select class="input" name="group_id"><option value="">未分組</option>${groups.map(g => `<option value="${g.id}"${g.id === s.group_id ? ' selected' : ''}>${esc(g.name)}</option>`).join('')}</select></label>${groups.length ? '' : '-->'}
+        <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-close>取消</button><button class="btn primary">儲存</button></div></form>`);
+    d.querySelector('[data-f]').onsubmit = async (e) => {
+      e.preventDefault(); const fd = Object.fromEntries(new FormData(e.target)); fd.group_id = fd.group_id ? Number(fd.group_id) : null;
+      try { await PATCH(`/students/${s.id}`, fd); d.close(); await reloadClass(); toast('已儲存'); renderStudents(); } catch (err) { fail(err); }
+    };
   };
   ACT.delsel = async () => {
     const ids = [...stuSel.ids]; if (!ids.length) return;
