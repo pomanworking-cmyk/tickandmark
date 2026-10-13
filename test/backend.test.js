@@ -200,10 +200,15 @@ async function scenario(c) {
     assert.equal(goal.progress, 0); assert.equal(goal.goal.target, 10);
     await c.req('POST', '/points', { class_id: c4a, student_ids: [a4ids[4], a4ids[5]], delta: 3, client_batch_id: 'goal-1' });
     const gneg = await c.req('POST', '/points', { class_id: c4a, student_ids: [a4ids[4]], delta: -2, client_batch_id: 'goal-2' });
-    goal = await c.req('GET', `/classes/${c4a}/goal`); assert.equal(goal.progress, 6, '扣分不減全班目標');
+    goal = await c.req('GET', `/classes/${c4a}/goal`); assert.equal(goal.progress, 4, '扣分令全班目標減少');
+    assert.equal(goal.gained, 6); assert.equal(goal.lost, 2);
     const g3 = await c.req('POST', '/points', { class_id: c4a, student_ids: [a4ids[6]], delta: 4, client_batch_id: 'goal-3' });
     await c.req('POST', `/batches/${g3.batch_id}/undo`);
-    goal = await c.req('GET', `/classes/${c4a}/goal`); assert.equal(goal.progress, 6, '撤銷的加分不計');
+    goal = await c.req('GET', `/classes/${c4a}/goal`); assert.equal(goal.progress, 4, '撤銷的加分不計');
+    const g4 = await c.req('POST', '/points', { class_id: c4a, student_ids: [a4ids[6], a4ids[7]], delta: -5, client_batch_id: 'goal-4' });
+    goal = await c.req('GET', `/classes/${c4a}/goal`); assert.equal(goal.progress, 0, '能量瓶最少係 0');
+    await c.req('POST', `/batches/${g4.batch_id}/undo`);
+    goal = await c.req('GET', `/classes/${c4a}/goal`); assert.equal(goal.progress, 4, '撤銷扣分後回復');
     await assert.rejects(c.req('POST', `/classes/${c4a}/goal`, { title: '', target: 10 }), /目標獎勵/);
     goal = await c.req('POST', `/classes/${c4a}/goal`, { title: '全班旅行', target: 50 }); assert.equal(goal.progress, 0, '新目標重新計');
     goal = await c.req('DELETE', `/classes/${c4a}/goal`); assert.equal(goal.goal, null);

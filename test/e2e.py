@@ -338,6 +338,12 @@ try:
         g = api(page, 'GET', f"/classes/{ids['4B']}/goal")
         check('全班目標：加分計入，達成時彈出慶祝', g['progress'] == 12 and '12' in page.inner_text('#goal-pill'), str(g))
         page.click('.celebrate.goal-win .cele-card'); page.click('.qchip[data-q="menu"]')
+        # 扣分令能量瓶下降
+        page.click('.qchip[data-q="d:-1"]'); page.click(f'.stu[data-id="{present_ids[0]}"]', position={'x': 20, 'y': 12}); page.click(f'.stu[data-id="{present_ids[1]}"]', position={'x': 20, 'y': 12})
+        wait_js(page, "document.getElementById('goal-pill')?.textContent.includes('10／10')")
+        g = api(page, 'GET', f"/classes/{ids['4B']}/goal")
+        check('全班目標：扣分會令能量瓶下降', g['progress'] == 10 and g['lost'] == 2 and '10' in page.inner_text('#goal-pill'), str(g))
+        page.click('.qchip[data-q="menu"]')
         page.click('#goal-pill'); page.wait_for_selector('dialog .jar'); page.screenshot(path=f'{OUT}/goal-jar.png'); page.click('dialog [data-close]')
         # 5) 獎勵兌換
         cur = {x['id']: x for x in api(page, 'GET', f"/classes/{ids['4B']}/full")['students']}

@@ -768,3 +768,13 @@ body:has(.selbar) .toasts { bottom: calc(96px + env(safe-area-inset-bottom, 0px)
 .q-text { font-family: var(--font-display); font-size: clamp(1.4rem, 5vw, 2.4rem); font-weight: 800; line-height: 1.3; word-break: break-word; }
 .q-ans { background: #fff; border-radius: 12px; padding: 4px 14px; font-weight: 800; color: var(--good, #2f9e6b); }
 .unlock #uq-own { max-width: 420px; }
+/* 全班目標：加減分時彈出 +N／−N */
+.goal-pill { position: relative; }
+.goal-delta { position: absolute; right: 10px; top: -6px; font-family: var(--font-num); font-weight: 800; font-size: 1rem; pointer-events: none; animation: goal-pop 1.5s ease-out forwards; }
+.goal-delta.up { color: var(--good, #2f9e6b); }
+.goal-delta.down { color: var(--bad); }
+@keyframes goal-pop { 0% { opacity: 0; transform: translateY(6px); } 20% { opacity: 1; } 100% { opacity: 0; transform: translateY(-22px); } }
+.goal-pill.shake { animation: shake .4s 2; }
+.goal-break { display: flex; gap: 10px; margin: 0 0 4px; font-weight: 800; font-family: var(--font-num); }
+.goal-break .up { color: var(--good, #2f9e6b); }
+.goal-break .down { color: var(--bad); }

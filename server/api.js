@@ -178,9 +178,11 @@ export function createApi(db) {
   // ---------- 全班合作目標 ----------
   const goalOf = async (cid) => {
     const g = (await db.get('SELECT * FROM class_goals WHERE class_id = ? AND ended_at IS NULL ORDER BY id DESC LIMIT 1', cid));
-    if (!g) return { goal: null, progress: 0 };
-    const progress = (await db.get("SELECT COALESCE(SUM(delta),0) n FROM score_events WHERE class_id = ? AND kind = 'point' AND delta > 0 AND undone_at IS NULL AND id > ?", cid, g.baseline_event_id)).n;
-    return { goal: { id: g.id, title: g.title, target: g.target, created_at: g.created_at }, progress };
+    if (!g) return { goal: null, progress: 0, gained: 0, lost: 0 };
+    // 加分令能量瓶上升，扣分令能量瓶下降（最少 0）；只計目標開始後、未撤銷的課堂加減分
+    const r = await db.get(`SELECT COALESCE(SUM(CASE WHEN delta > 0 THEN delta ELSE 0 END),0) AS gained, COALESCE(SUM(CASE WHEN delta < 0 THEN -delta ELSE 0 END),0) AS lost
+      FROM score_events WHERE class_id = ? AND kind = 'point' AND undone_at IS NULL AND id > ?`, cid, g.baseline_event_id);
+    return { goal: { id: g.id, title: g.title, target: g.target, created_at: g.created_at }, progress: Math.max(0, r.gained - r.lost), gained: r.gained, lost: r.lost };
   };
   on('GET', '/classes/:id/goal', async ({ tid, p }) => await goalOf((await own('classes', p.id, tid)).id));
   on('POST', '/classes/:id/goal', async ({ tid, p, body }) => {

@@ -11,7 +11,7 @@ export async function startTursoMock({ token = 'test-token', latency = 0, file =
   file ||= path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'turso-')), 'db.sqlite');
   const streams = new Map(); // baton -> connection
   const stats = { requests: 0, statements: 0 };
-  const open = () => { const c = new DatabaseSync(file); c.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;'); return c; };
+  const open = () => { const c = new DatabaseSync(file); c.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 0;'); return c; };
   const decArg = (v) => (v.type === 'integer' ? Number(v.value) : v.type === 'float' ? v.value : v.type === 'text' ? v.value : v.type === 'blob' ? Buffer.from(v.base64, 'base64') : null);
   const encVal = (v) => (v === null || v === undefined ? { type: 'null' } : typeof v === 'number' ? (Number.isInteger(v) ? { type: 'integer', value: String(v) } : { type: 'float', value: v })
     : typeof v === 'bigint' ? { type: 'integer', value: v.toString() } : Buffer.isBuffer(v) || v instanceof Uint8Array ? { type: 'blob', base64: Buffer.from(v).toString('base64') } : { type: 'text', value: String(v) });

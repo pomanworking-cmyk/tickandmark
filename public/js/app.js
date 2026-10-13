@@ -229,7 +229,7 @@ async function givePoints(ids, { delta, tag, reason, quick = false }) {
   if (fed.size) drawHungryPill();
   const names = res.results.length > 3 ? `${res.results.length} 位同學` : res.results.map(r => r.name).join('、');
   toast(`${names} ${signed(d)}（${label}）`, { action: () => undoBatch(res.batch_id), actionLabel: '撤銷' });
-  if (d > 0) refreshGoal().catch(() => {});
+  refreshGoal().catch(() => {}); // 加分令能量瓶上升，扣分令佢下降
   return res;
 }
 async function undoBatch(id) {
@@ -777,6 +777,11 @@ async function refreshGoal() {
   if (!state.goal?.goal) return;
   const before = state.goal.progress; const target = state.goal.goal.target;
   state.goal = await GET(`/classes/${state.classId}/goal`); drawGoalPill();
+  const diff = state.goal.progress - before;
+  if (diff) { // 能量瓶旁邊彈出 +N／−N
+    const el = $('#goal-pill');
+    if (el) { const f = document.createElement('span'); f.className = 'goal-delta ' + (diff > 0 ? 'up' : 'down'); f.textContent = (diff > 0 ? '+' : '−') + Math.abs(diff); el.appendChild(f); setTimeout(() => f.remove(), 1600); if (diff < 0) { el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); } }
+  }
   if (before < target && state.goal.progress >= target) setTimeout(() => goalReached(), 1800);
 }
 function goalReached() {
@@ -796,8 +801,9 @@ function openGoal() {
   const d = openDialog(`<div class="sheet-head"><h2>全班合作目標</h2><button class="btn ghost" data-close>✕</button></div>
     ${g ? `<div class="jar-wrap"><div class="jar"><div class="fill" style="height:${pct}%"></div><div class="jar-num num">${pct}%</div></div>
       <div><div class="jar-title">${esc(g.title)}</div><p class="num" style="font-size:1.4rem;margin:6px 0"><b>${state.goal.progress}</b>／${g.target} 分</p>
-      <p class="muted">${state.goal.progress >= g.target ? '已經達成！🎉' : `仲差 ${g.target - state.goal.progress} 分`}・只計目標開始後全班嘅加分，扣分唔會減少。</p>
-      <button class="btn danger sm" data-end>結束目標</button></div></div><div class="section-label">改設新目標</div>` : '<p class="muted">全班一齊儲分，達成後一齊領獎勵。只計開始後嘅加分，扣分唔會減少進度。</p>'}
+      <p class="goal-break"><span class="up">加分 +${state.goal.gained ?? state.goal.progress}</span><span class="down">扣分 −${state.goal.lost ?? 0}</span></p>
+      <p class="muted">${state.goal.progress >= g.target ? '已經達成！🎉' : `仲差 ${g.target - state.goal.progress} 分`}・計目標開始後全班嘅加減分：加分令能量瓶上升，扣分會令佢下降。</p>
+      <button class="btn danger sm" data-end>結束目標</button></div></div><div class="section-label">改設新目標</div>` : '<p class="muted">全班一齊儲分，達成後一齊領獎勵。計開始後嘅加減分：加分令能量瓶上升，扣分會令佢下降。</p>'}
     <form class="row" data-f><label class="field"><span>獎勵</span><input class="input" id="goal-title" name="title" required maxlength="40" placeholder="例如：全班看電影"></label>
       <label class="field" style="flex:0 0 130px"><span>目標分數</span><input class="input num" id="goal-target" name="target" type="number" min="1" value="${Math.max(20, n * 5)}" required></label>
       <button class="btn primary">${g ? '開始新目標' : '開始'}</button></form>`);

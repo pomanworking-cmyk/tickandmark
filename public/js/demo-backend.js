@@ -59,9 +59,10 @@ export function createDemoBackend(initial) {
   const listRewards = (tid) => S.rewards.filter(r => r.teacher_id === tid).sort((a, b) => a.sort - b.sort || a.id - b.id).map(({ id, title, cost, icon, sort }) => ({ id, title, cost, icon, sort }));
   const goalOf = (cid) => {
     const g = S.class_goals.filter(g => g.class_id === cid && !g.ended_at).sort((a, b) => b.id - a.id)[0];
-    if (!g) return { goal: null, progress: 0 };
-    const progress = S.score_events.filter(e => e.class_id === cid && e.kind === 'point' && e.delta > 0 && !e.undone_at && e.id > g.baseline_event_id).reduce((a, e) => a + e.delta, 0);
-    return { goal: { id: g.id, title: g.title, target: g.target, created_at: g.created_at }, progress };
+    if (!g) return { goal: null, progress: 0, gained: 0, lost: 0 };
+    const evs = S.score_events.filter(e => e.class_id === cid && e.kind === 'point' && !e.undone_at && e.id > g.baseline_event_id);
+    const gained = evs.filter(e => e.delta > 0).reduce((a, e) => a + e.delta, 0); const lost = evs.filter(e => e.delta < 0).reduce((a, e) => a - e.delta, 0);
+    return { goal: { id: g.id, title: g.title, target: g.target, created_at: g.created_at }, progress: Math.max(0, gained - lost), gained, lost };
   };
   function addTemplate(tid, title, subject) {
     if (!S.homework_templates.some(t => t.teacher_id === tid && t.title === title && t.subject === subject)) insert('homework_templates', { teacher_id: tid, title, subject });

@@ -72,11 +72,22 @@ export function openTurso({ url, authToken, fetchImpl = globalThis.fetch }) {
     },
     async tx(fn) {
       if (txStream) return fn();
+      // 另一個請求（例如同時撳兩位學生）正在寫入時，BEGIN 會報「database is locked」：稍等再試，最多約 3 秒
+      for (let attempt = 0; ; attempt++) {
+        try { return await this.txOnce(fn); }
+        catch (e) {
+          if (!e.beginBusy || attempt >= 7) throw e;
+          await new Promise(r => setTimeout(r, 40 * 2 ** attempt * (0.7 + Math.random() * 0.6)));
+        }
+      }
+    },
+    async txOnce(fn) {
       txStream = { baton: null, baseUrl: null };
       const stream = txStream;
       let result;
       try {
-        await execute('BEGIN IMMEDIATE', []);
+        try { await execute('BEGIN IMMEDIATE', []); }
+        catch (e) { if (/locked|busy/i.test(`${e.message} ${e.code || ''}`)) e.beginBusy = true; throw e; }
         result = await fn();
       } catch (e) {
         txStream = null;
