@@ -32,7 +32,8 @@ export function avatar(student, size) {
     return `<span class="avatar" data-student="${student?.id ?? ''}" data-species="none" data-stage="none"${style}><span class="initial" aria-label="${esc(student?.name)}（未派蛋）">${esc((student?.name || '?').slice(-1))}</span></span>`;
   }
   if (pet.student_record_id !== student.id) throw new Error('寵物與學生對應錯誤'); // 防止錯配
-  return `<span class="avatar" data-student="${student.id}" data-species="${pet.species_key}" data-stage="${pet.stage}"${style}><img src="${petImageUrl(pet, ASSET_BASE)}" alt="${esc(petLabel(pet))}" draggable="false"></span>`;
+  // 冰封中（欠交功課太耐）：變灰並加鎖頭
+  return `<span class="avatar${pet.locked ? ' locked' : ''}" data-student="${student.id}" data-species="${pet.species_key}" data-stage="${pet.stage}"${pet.locked ? ' data-locked="1"' : ''}${style}><img src="${petImageUrl(pet, ASSET_BASE)}" alt="${esc(petLabel(pet))}${pet.locked ? '（冰封中）' : ''}" draggable="false">${pet.locked ? '<span class="lock-badge" aria-hidden="true">🔒</span>' : ''}</span>`;
 }
 // 圖鑑用：品種＋階段（不屬於任何學生）
 export function dexImage(species_key, stage, extraClass = '') {
@@ -93,20 +94,22 @@ export function celebrate(results, { label, thresholds, quick = false, fed = new
     const pa = r.pet ? progressInfo(r.pet, thresholds) : null;
     inner = `<div class="cele-card" data-cele-student="${r.student_id}">
       ${avatar(st)}
-      ${fed.has(r.student_id) ? `<div class="fed-bubble">${r.pet?.stage === 'egg' ? '好暖呀，多謝主人！🥰' : '多謝主人！我食飽喇～😋'}</div>` : ''}
+      ${r.pet?.locked ? '<div class="fed-bubble lock">好凍呀…我被冰封咗 🥶</div>' : ''}
+      ${!r.pet?.locked && fed.has(r.student_id) ? `<div class="fed-bubble">${r.pet?.stage === 'egg' ? '好暖呀，多謝主人！🥰' : '多謝主人！我食飽喇～😋'}</div>` : ''}
       <div class="who">${esc(r.name)}</div>
       <div class="delta num">+${r.delta}</div>
       <div class="what">${esc(label || '')}</div>
       ${r.pet ? `<div class="xpline"><span>${esc(petLabel(r.pet))}${r.pet.nickname ? `「${esc(r.pet.nickname)}」` : ''}</span><span class="num">XP ${r.pet.xp}${pa.next ? '／' + pa.need : ''}</span></div>
         <div class="xpbar"><i style="width:${r.leveled_up ? 0 : pb}%" data-to="${pa.pct}"></i></div>` : '<div class="muted small" style="margin-top:8px">未派蛋，派蛋後的加分才會成為寵物 XP</div>'}
       ${r.leveled_up ? `<div class="levelup">${esc(stageWord(r.stage_before, r.stage_after))}</div>` : ''}
+      ${r.pet?.locked ? '<div class="lock-line">🔒 寵物冰封中：分數照加，但暫時唔會長大。交齊功課、答啱老師一條問題就可以解鎖！</div>' : ''}
       ${remind.get(r.student_id) ? `<div class="remind-line">${esc(remind.get(r.student_id))}</div>` : ''}
     </div>`;
   } else {
     inner = `<div class="cele-card" style="width:min(640px,100%)">
       <div class="delta num">+${pos[0].delta}</div><div class="what">${esc(label || '')} · ${pos.length} 位同學</div>
       <div class="cele-multi">${pos.map((r, i) => `<div class="m" style="animation-delay:${Math.min(i, 20) * 40}ms" data-cele-student="${r.student_id}">
-        ${avatar({ id: r.student_id, name: r.name, pet: r.pet })}<b>${esc(r.name)}</b>${fed.has(r.student_id) ? '<span class="lv fed">食飽喇 😋</span>' : ''}${remind.get(r.student_id) ? '<span class="lv hw">記得交功課📕</span>' : ''}${r.leveled_up ? `<span class="lv">${esc(stageWord(r.stage_before, r.stage_after))}</span>` : ''}</div>`).join('')}</div>
+        ${avatar({ id: r.student_id, name: r.name, pet: r.pet })}<b>${esc(r.name)}</b>${r.pet?.locked ? '<span class="lv lock">冰封中 🔒</span>' : fed.has(r.student_id) ? '<span class="lv fed">食飽喇 😋</span>' : ''}${remind.get(r.student_id) ? '<span class="lv hw">記得交功課📕</span>' : ''}${r.leveled_up ? `<span class="lv">${esc(stageWord(r.stage_before, r.stage_after))}</span>` : ''}</div>`).join('')}</div>
     </div>`;
   }
   el.innerHTML = inner;

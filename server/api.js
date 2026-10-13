@@ -1,7 +1,7 @@
 // Tick and Mark API（業務邏輯）。所有查詢都限制在登入老師的 teacher_id 內。
 import {
   SPECIES_KEYS, STAGES, DEFAULT_THRESHOLDS, normalizeThresholds, nextStage, stageForXp,
-  stageIndex, isXpEligible, balancedSpecies,
+  stageIndex, isXpEligible, balancedSpecies, lockInfo, DEFAULT_LOCK_DAYS,
 } from '../public/shared/pet-logic.js';
 
 export class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
@@ -59,9 +59,17 @@ export function createApi(db) {
     id: p.id, student_record_id: p.student_record_id, species_key: p.species_key, stage: p.stage,
     xp: p.xp, baseline_event_id: p.baseline_event_id, nickname: p.nickname,
     accessories: JSON.parse(p.accessories || '[]'), assigned_at: p.assigned_at, hatched_at: p.hatched_at, last_fed_at: p.last_fed_at ?? null,
+    unlocked_at: p.unlocked_at ?? null, ...lockOf(p),
   });
+  // 冰封狀態：由該學生的欠交紀錄即時計出（見 pet-logic.js lockInfo）
+  const lockOf = (p) => { const li = lockInfo(p, JSON.parse(p.lock_rows || '[]'), p.lock_days ?? DEFAULT_LOCK_DAYS); return { locked: li.locked, lock_titles: li.titles }; };
   const PET_SELECT = `SELECT p.*, (SELECT MAX(e.created_at) FROM pet_xp_ledger l JOIN score_events e ON e.id = l.score_event_id
-      WHERE l.pet_id = p.id AND l.reversed_at IS NULL) AS last_fed_at FROM student_pets p`;
+      WHERE l.pet_id = p.id AND l.reversed_at IS NULL) AS last_fed_at,
+    (SELECT json_group_array(json_object('status', hs.status, 'since', hs.missing_since, 'until', hs.missing_until, 'updated_at', hs.updated_at, 'title', h.title))
+      FROM homework_submissions hs JOIN homework h ON h.id = hs.homework_id
+      WHERE hs.student_id = p.student_record_id AND (hs.status = 'missing' OR hs.missing_until IS NOT NULL)) AS lock_rows,
+    (SELECT st.lock_days FROM settings st WHERE st.teacher_id = p.teacher_id) AS lock_days
+    FROM student_pets p`;
   const petOf = async (studentId) => petRow((await db.get(`${PET_SELECT} WHERE p.student_record_id = ?`, studentId)));
   const studentsOf = async (classId) => {
     const rows = (await db.all(`SELECT s.*, (SELECT COALESCE(SUM(cost),0) FROM redemptions r WHERE r.student_id = s.id AND r.undone_at IS NULL) AS spent
@@ -98,13 +106,14 @@ export function createApi(db) {
   // 一次 HTTP 請求讀取全部啟動資料（雲端資料庫每次來回都需要時間）
   on('GET', '/bootstrap', async ({ tid }) => {
     const [st, tags, classes, tpls, rewards] = await db.batch([
-      ['SELECT thresholds, hunger_days, timer_presets FROM settings WHERE teacher_id = ?', tid],
+      ['SELECT thresholds, hunger_days, lock_days, timer_presets FROM settings WHERE teacher_id = ?', tid],
       ['SELECT * FROM behavior_tags WHERE teacher_id = ? ORDER BY sort, id', tid],
       [CLASSES_SQL, tid], [TEMPLATES_SQL, tid], [REWARDS_SQL, tid]]);
     const row = st.rows[0];
     return {
       thresholds: row ? normalizeThresholds(JSON.parse(row.thresholds)) : { ...DEFAULT_THRESHOLDS },
       hunger_days: row?.hunger_days ?? 3,
+      lock_days: row?.lock_days ?? DEFAULT_LOCK_DAYS,
       timer_presets: JSON.parse(row?.timer_presets || '[60,180,300,600]'),
       tags: tags.rows, classes: classes.rows, homework_templates: tpls.rows, rewards: rewards.rows,
     };
@@ -436,7 +445,7 @@ export function createApi(db) {
       const [b, sr, pr] = await db.batch([
         ['INSERT INTO score_batches (teacher_id, class_id, client_batch_id, label) VALUES (?,?,?,?) RETURNING id', tid, c.id, clientBatch, label],
         [`SELECT id, class_id FROM students WHERE teacher_id = ? AND id IN (${inList(ids)})`, tid, ...ids],
-        [`SELECT * FROM student_pets WHERE student_record_id IN (${inList(ids)})`, ...ids]]);
+        [`${PET_SELECT} WHERE p.student_record_id IN (${inList(ids)})`, ...ids]]);
       const bid = b.rows[0].id;
       const owned = new Map(sr.rows.map(r => [r.id, r]));
       const pets = new Map(pr.rows.map(p => [p.student_record_id, p]));
@@ -449,6 +458,7 @@ export function createApi(db) {
       ids.forEach((sid, i) => {
         const event = res[i * 2].rows[0]; const pet = pets.get(sid);
         if (!isXpEligible(event, pet)) return;
+        if (lockOf(pet).locked) return; // 冰封中：分數照加，寵物暫時唔會長大
         const xp = pet.xp + delta; const stage = nextStage(pet.stage, xp, th);
         // score_event_id 是主鍵：同一筆加分在資料庫層面只可入帳一次
         xpStmts.push(['INSERT INTO pet_xp_ledger (score_event_id, pet_id, xp, stage_before, stage_after) VALUES (?,?,?,?,?)', event.id, pet.id, delta, pet.stage, stage]);
@@ -557,6 +567,12 @@ export function createApi(db) {
     return await studentFull(pet.student_record_id);
   });
 
+  // 老師問咗一條問題、學生答啱之後解除冰封
+  on('POST', '/pets/:id/unlock', async ({ tid, p }) => {
+    const pet = await own('student_pets', p.id, tid);
+    (await db.run('UPDATE student_pets SET unlocked_at = ?, updated_at = ? WHERE id = ?', now(), now(), pet.id));
+    return await studentFull(pet.student_record_id);
+  });
   on('DELETE', '/pets/:id', async ({ tid, p }) => {
     await own('student_pets', p.id, tid); (await db.run('DELETE FROM student_pets WHERE id = ?', p.id)); return { ok: true };
   });
@@ -571,6 +587,10 @@ export function createApi(db) {
         const hd = int(body.hunger_days); if (!(hd >= 0 && hd <= 30)) throw bad('肚餓提示日數須為 0 至 30（0 = 關閉）');
         (await db.run('UPDATE settings SET hunger_days = ? WHERE teacher_id = ?', hd, tid));
       }
+      if (body.lock_days !== undefined) {
+        const ld = int(body.lock_days); if (!(ld >= 0 && ld <= 30)) throw bad('冰封日數須為 0 至 30（0 = 關閉）');
+        (await db.run('UPDATE settings SET lock_days = ? WHERE teacher_id = ?', ld, tid));
+      }
       if (Array.isArray(body.timer_presets)) (await db.run('UPDATE settings SET timer_presets = ? WHERE teacher_id = ?', JSON.stringify(body.timer_presets.map(int).filter(n => n > 0 && n <= 7200).slice(0, 8)), tid));
       for (const pet of (await db.all('SELECT * FROM student_pets WHERE teacher_id = ?', tid))) {
         const st = nextStage(pet.stage, pet.xp, th);
@@ -580,7 +600,8 @@ export function createApi(db) {
         }
       }
     });
-    return { thresholds: th, upgraded, hunger_days: (await db.get('SELECT hunger_days FROM settings WHERE teacher_id = ?', tid)).hunger_days };
+    const st = await db.get('SELECT hunger_days, lock_days FROM settings WHERE teacher_id = ?', tid);
+    return { thresholds: th, upgraded, hunger_days: st.hunger_days, lock_days: st.lock_days };
   });
 
   // 資料一致性自我檢查（驗收用）
@@ -643,8 +664,14 @@ export function createApi(db) {
     await db.tx(async () => {
       await db.batch(entries.map(e => (!e.status
         ? ['DELETE FROM homework_submissions WHERE homework_id = ? AND student_id = ?', h.id, int(e.student_id)]
-        : [`INSERT INTO homework_submissions (homework_id, student_id, status, updated_at) VALUES (?,?,?,?)
-            ON CONFLICT(homework_id, student_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at`, h.id, int(e.student_id), e.status, now()])));
+        : [`INSERT INTO homework_submissions (homework_id, student_id, status, updated_at, missing_since) VALUES (?,?,?,?, CASE WHEN ? = 'missing' THEN ? END)
+            ON CONFLICT(homework_id, student_id) DO UPDATE SET
+              missing_since = CASE WHEN excluded.status = 'missing'
+                THEN (CASE WHEN homework_submissions.status = 'missing' THEN COALESCE(homework_submissions.missing_since, homework_submissions.updated_at) ELSE excluded.updated_at END)
+                ELSE homework_submissions.missing_since END,
+              missing_until = CASE WHEN excluded.status = 'missing' THEN NULL
+                WHEN homework_submissions.status = 'missing' THEN excluded.updated_at ELSE homework_submissions.missing_until END,
+              status = excluded.status, updated_at = excluded.updated_at`, h.id, int(e.student_id), e.status, now(), e.status, now()])));
     });
     return { ok: true };
   });

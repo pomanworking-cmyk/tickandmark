@@ -14,6 +14,10 @@ const UPGRADES = [
   ['teachers', 'is_admin', 'INTEGER NOT NULL DEFAULT 0'],
   ['teachers', 'last_login_at', 'TEXT'],
   ['teachers', 'last_seen_at', 'TEXT'],
+  ['settings', 'lock_days', 'INTEGER NOT NULL DEFAULT 3'],
+  ['homework_submissions', 'missing_since', 'TEXT'],
+  ['homework_submissions', 'missing_until', 'TEXT'],
+  ['student_pets', 'unlocked_at', 'TEXT'],
 ];
 
 export async function initSchema(db) {

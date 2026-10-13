@@ -116,7 +116,9 @@ function homeworkMessage(s, list = missingOf(s)) {
 }
 const present = () => students().filter(s => !state.absent.has(s.id));
 const hungerDays = () => state.boot?.hunger_days ?? 3;
-const hungerOf = (s) => hungerLevel(s?.pet, hungerDays());
+const hungerOf = (s) => (s?.pet?.locked ? 0 : hungerLevel(s?.pet, hungerDays())); // 冰封中就唔顯示肚餓
+const lockDays = () => state.boot?.lock_days ?? 3;
+const lockedList = () => students().filter(s => s.pet?.locked).sort(byNumber);
 const hungryList = () => students().filter(s => hungerOf(s) > 0).sort((a, b) => hungerOf(b) - hungerOf(a) || byNumber(a, b));
 function hungerBubble(s, big = false) {
   const lv = hungerOf(s); if (!lv) return '';
@@ -130,6 +132,7 @@ function hungerBubble(s, big = false) {
 // 課室卡上的小氣泡：欠交功課及肚餓都有時輪流顯示
 function petBubble(s) {
   if (!s.pet || state.absent.has(s.id)) return '';
+  if (s.pet.locked) return '<span class="hungry-bubble lock">🔒 冰封</span>';
   const hw = missingOf(s).length; const lv = hungerOf(s);
   const hwText = hw > 1 ? `${hw} 份功課未交📕` : '交功課呀📕';
   const hunger = lv ? (lv === 2 ? '幫幫我！' : s.pet.stage === 'egg' ? '好凍～' : '肚餓～') : '';
@@ -248,6 +251,7 @@ function pointSheet(ids) {
         <div class="muted small">${list.length === 1 ? `${list[0].number ?? ''}號 · 現有 <b class="num">${list[0].score}</b> 分 · ${esc(petStatus(list[0].pet, thresholds()))}` : esc(list.map(s => s.name).join('、'))}</div></div>
       <button class="btn ghost" data-close aria-label="關閉">✕</button>
     </div>
+    ${list.length === 1 && list[0].pet?.locked ? `<div class="lock-banner"><span>🔒 寵物冰封中（欠交：${esc(list[0].pet.lock_titles.join('、'))}）。分數照加，但寵物唔會長大。</span><button class="btn sm primary" data-unlock>問問題解鎖</button></div>` : ''}
     <div class="section-label">行為標籤</div>
     <div class="tag-grid">${tags.map(t => `<button class="tag-btn ${t.points > 0 ? 'pos' : 'neg'}" data-tag="${t.id}"><span class="ic">${esc(t.icon)}</span><span>${esc(t.label)}</span><span class="pt">${signed(t.points)}</span></button>`).join('')}</div>
     <div class="section-label">快速加減分</div>
@@ -265,6 +269,7 @@ function pointSheet(ids) {
     const t = e.target.closest('[data-tag]'); if (t) return done({ tag: tags.find(x => x.id === Number(t.dataset.tag)) });
     const q = e.target.closest('[data-d]'); if (q) return done({ delta: Number(q.dataset.d) });
     if (e.target.closest('[data-redeem]')) { d.close(); openRewards(ids[0]); }
+    if (e.target.closest('[data-unlock]')) { d.close(); unlockFlow(list[0]); }
   });
   d.querySelector('[data-custom]').addEventListener('submit', (e) => {
     e.preventDefault(); const fd = new FormData(e.target);
@@ -358,6 +363,7 @@ function renderRoom() {
       <button class="tool" data-act="regroup">👥 分組</button>
       <button class="tool" data-act="rewards">🎁 兌換</button>
       <button class="tool" data-act="recent">🕘 最近操作</button>
+      <button class="tool lock-pill" data-act="locked" id="lock-pill" hidden></button>
       <button class="tool hungry-pill" data-act="hungry" id="hungry-pill" hidden></button>
       <button class="tool missing-pill" data-act="missinghw" id="missing-pill" hidden></button>
       <button class="goal-pill" data-act="goal" id="goal-pill"></button>
@@ -396,6 +402,7 @@ function renderRoom() {
   ACT.rewards = () => openRewards();
   ACT.goal = () => openGoal();
   ACT.hungry = () => openHungry();
+  ACT.locked = () => openLocked();
   ACT.missinghw = () => openMissing();
   ACT.hwset = (el) => { room.hwStatus = el.dataset.v; drawQuickBar(); };
   ACT.hwnew = () => newHomeworkQuick();
@@ -473,9 +480,67 @@ function openMissing() {
   draw();
 }
 function drawHungryPill() {
-  const el = $('#hungry-pill'); if (!el) return;
-  const n = hungryList().length; el.hidden = !n;
-  el.innerHTML = `🍙 肚餓寵物 <b class="num">${n}</b>`;
+  const el = $('#hungry-pill'); if (el) { const n = hungryList().length; el.hidden = !n; el.innerHTML = `🍙 肚餓寵物 <b class="num">${n}</b>`; }
+  const lk = $('#lock-pill'); if (lk) { const n = lockedList().length; lk.hidden = !n; lk.innerHTML = `🔒 冰封寵物 <b class="num">${n}</b>`; }
+}
+// ---------- 冰封寵物（欠交功課超過 N 個上課日） ----------
+function openLocked() {
+  const list = lockedList();
+  const d = openDialog(`<div class="sheet-head"><h2>🔒 冰封寵物</h2><button class="btn ghost" data-close>✕</button></div>
+    <p class="muted small" style="margin-top:0">欠交功課超過 ${lockDays()} 個上課日（周末唔計）嘅寵物會變灰冰封：分數照加，但寵物暫時唔會長大。老師問一條問題，學生答啱就可以解鎖。</p>
+    ${list.length ? `<div class="stack" style="gap:6px">${list.map(s => `<div class="status-row">${avatar(s, 46)}<span class="who">${s.number ?? ''} ${esc(s.name)}<br><span class="small muted">欠交：${esc(s.pet.lock_titles.join('、'))}</span></span>
+      <button class="btn sm primary" data-unlock="${s.id}">🔓 問問題解鎖</button></div>`).join('')}</div>` : '<div class="empty">冇寵物被冰封 🎉</div>'}`);
+  d.addEventListener('click', (e) => { const b = e.target.closest('[data-unlock]'); if (!b) return; d.close(); unlockFlow(students().find(x => x.id === Number(b.dataset.unlock))); });
+}
+// 解鎖問題：隨機數學題或常識／中英文小問題；老師亦可以自己出題
+const QUESTION_BANK = [
+  ['一星期有幾多日？', '7 日'], ['一年有幾多個月？', '12 個月'], ['「森」字有幾多個「木」？', '3 個'], ['水喺攝氏幾多度會結冰？', '0°C'],
+  ['香港區旗上面係咩花？', '洋紫荊'], ['彩虹有幾多種顏色？', '7 種'], ['一隻蜘蛛有幾多隻腳？', '8 隻'], ['講出「高」嘅相反詞', '矮'],
+  ['講出「快」嘅相反詞', '慢'], ['一個鐘頭有幾多分鐘？', '60 分鐘'], ['正方形有幾多條邊？', '4 條'], ['地球圍住咩轉？', '太陽'],
+  ['講出兩種會飛嘅動物', '例如：雀仔、蝴蝶'], ['用「因為……所以……」作一句句子', '（老師判斷）'], ['講出三種顏色嘅英文', '例如：red, blue, green'],
+  ['What is the opposite of "hot"?', 'cold'], ['How do you spell "school"?', 's-c-h-o-o-l'], ['How many days are there in a week?', 'seven'],
+  ['What colour is a banana?', 'yellow'], ['Say "Good morning" to your classmates!', '（老師判斷）'], ['你欠交嘅功課幾時會交俾老師？', '（承諾交功課日期）'],
+];
+let lastQ = -1;
+function randomQuestion() {
+  const r = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+  if (Math.random() < 0.4) {
+    const k = r(0, 2);
+    if (k === 0) { const a = r(2, 9); const b = r(2, 9); return [`${a} × ${b} = ？`, String(a * b)]; }
+    if (k === 1) { const a = r(12, 89); const b = r(11, 99 - a); return [`${a} + ${b} = ？`, String(a + b)]; }
+    const a = r(30, 99); const b = r(11, a - 5); return [`${a} − ${b} = ？`, String(a - b)];
+  }
+  let i; do { i = r(0, QUESTION_BANK.length - 1); } while (i === lastQ); lastQ = i;
+  return QUESTION_BANK[i];
+}
+function unlockFlow(s, after) {
+  if (!s?.pet) return;
+  let [q, a] = randomQuestion();
+  const d = openDialog(`<div class="sheet-head"><h2>🔓 解除冰封</h2><button class="btn ghost" data-close>✕</button></div>
+    <div class="unlock">
+      <div class="unlock-pet">${avatar(s, 120)}</div>
+      <div class="unlock-who">${esc(s.name)} 嘅寵物被冰封咗</div>
+      <div class="muted small">欠交：${esc((s.pet.lock_titles || []).join('、') || '—')}</div>
+      <div class="q-card"><div class="q-label">老師問題</div><div class="q-text" id="uq-text">${esc(q)}</div>
+        <button class="btn ghost sm" id="uq-show">👀 顯示答案</button><div class="q-ans" id="uq-ans" hidden>${esc(a)}</div></div>
+      <div class="row" style="justify-content:center"><button class="btn sm" id="uq-next">🎲 換一題</button></div>
+      <input class="input" id="uq-own" maxlength="80" placeholder="✏️ 或者自己出題，例如：今日學咗咩成語？">
+      <div class="row" style="justify-content:center"><button class="btn" data-close>未答啱，遲啲再試</button><button class="btn primary" id="uq-ok">答啱咗，解鎖 🔓</button></div>
+    </div>`, { full: true });
+  const show = () => { $('#uq-text', d).textContent = q; $('#uq-ans', d).textContent = a; $('#uq-ans', d).hidden = true; $('#uq-show', d).style.display = a ? '' : 'none'; };
+  $('#uq-next', d).onclick = () => { [q, a] = randomQuestion(); $('#uq-own', d).value = ''; show(); };
+  $('#uq-show', d).onclick = () => { $('#uq-ans', d).hidden = false; $('#uq-show', d).style.display = 'none'; };
+  $('#uq-own', d).oninput = (e) => { const v = e.target.value.trim(); if (v) { q = v; a = ''; show(); } };
+  $('#uq-ok', d).onclick = async (e) => {
+    e.target.disabled = true;
+    try {
+      const full = await POST(`/pets/${s.pet.id}/unlock`);
+      const st = students().find(x => x.id === s.id); if (st) st.pet = full.pet;
+      $('.unlock-pet', d).innerHTML = avatar(full, 120); $('.unlock-pet', d).classList.add('thaw');
+      $('.unlock-who', d).textContent = `解鎖成功！${full.name} 嘅寵物返嚟喇 🎉`;
+      setTimeout(() => { d.close(); if ($('#room-grid')) { drawRoomGrid(); drawHungryPill(); } after?.(); }, 1600);
+    } catch (err) { e.target.disabled = false; fail(err); }
+  };
 }
 function openHungry() {
   const list = hungryList();
@@ -1495,14 +1560,15 @@ async function renderStudent(id) {
       <h1>${s.number ?? ''} ${esc(s.name)}</h1><span class="chip gold num" style="font-size:1.1rem">${s.score} 分</span>${s.spent ? `<span class="chip good">可用 ${s.score - s.spent}・已兌換 ${s.spent}</span>` : ''}
       <button class="btn primary" data-act="give">加減分</button></div>
     <div class="profile">
-      <section class="pet-card${hungerOf(s) ? ' hungry h' + hungerOf(s) : ''}">
+      <section class="pet-card${hungerOf(s) ? ' hungry h' + hungerOf(s) : ''}${pet?.locked ? ' is-locked' : ''}">
+        ${pet?.locked ? `<div class="speech lock">主人，你欠交功課超過 ${lockDays()} 個上課日，我被冰封咗 🥶 交齊功課，再答啱老師一條問題就可以救我出嚟！<small>欠交：${esc(pet.lock_titles.join('、'))}</small></div>` : ''}
         ${pet ? hungerBubble(s, true) : ''}${pet && d.homework.some(h => h.status === 'missing') ? `<div class="speech hw">${esc(homeworkMessage(s, d.homework.filter(h => h.status === 'missing')))}<small>${d.homework.filter(h => h.status === 'missing').map(h => esc(h.title)).join('、')}</small></div>` : ''}${avatar(s)}
         ${pet ? `<h2>${esc(petLabel(pet))}${pet.nickname ? `「${esc(pet.nickname)}」` : ''}</h2>
           <div class="muted small">${esc(speciesByKey[pet.species_key].element)}屬性 · 派蛋於 ${fmtDate(pet.assigned_at)}${pet.hatched_at ? ` · 孵化於 ${fmtDate(pet.hatched_at)}` : ''}</div>
           <div style="display:flex;justify-content:space-between" class="small"><span>XP <b class="num">${pet.xp}</b></span><span>${p.next ? `再 ${p.remaining} XP ${pet.stage === 'egg' ? '孵化' : '成為' + STAGE_LABELS[p.next]}` : '已完全進化'}</span></div>
           ${xpBar(pet, th)}
           <div class="timeline">${STAGES.map((st, i) => `<div class="${i <= STAGES.indexOf(pet.stage) ? '' : 'locked'} ${st === pet.stage ? 'cur' : ''}">${dexImage(pet.species_key, st)}<div class="t">${STAGE_LABELS[st]}</div></div>`).join('')}</div>
-          <div class="row" style="justify-content:center"><button class="btn sm" data-act="rename">改名</button>${pet.stage === 'egg' ? '<button class="btn sm" data-act="swap">更換蛋</button>' : ''}</div>`
+          <div class="row" style="justify-content:center">${pet.locked ? '<button class="btn sm primary" data-act="unlock">🔓 問問題解鎖</button>' : ''}<button class="btn sm" data-act="rename">改名</button>${pet.stage === 'egg' ? '<button class="btn sm" data-act="swap">更換蛋</button>' : ''}</div>`
         : `<h2>未派蛋</h2><p class="muted small">到「寵物」頁為這位學生派蛋。派蛋之後的加分才會成為 XP。</p><a class="btn" href="#/c/${d.class.id}/pets">去派蛋</a>`}
       </section>
       <div class="stack">
@@ -1522,6 +1588,7 @@ async function renderStudent(id) {
     const obs = new MutationObserver(() => { if (!document.querySelector('dialog')) { obs.disconnect(); renderStudent(id).catch(fail); } });
     obs.observe(document.body, { childList: true });
   };
+  ACT.unlock = () => unlockFlow(s, () => renderStudent(id).catch(fail));
   ACT.rename = () => editDialog('寵物名字（最多 12 字，留空即取消）', pet.nickname || '', async (v) => { await PATCH(`/pets/${pet.id}`, { nickname: v }); await reloadClass(); renderStudent(id); });
   ACT.swap = () => {
     const dd = openDialog(`<div class="sheet-head"><h2>更換蛋（未孵化才可更換）</h2><button class="btn ghost" data-close>✕</button></div>
@@ -1581,6 +1648,8 @@ function renderSettings() {
           <div class="row">${['baby', 'junior', 'adult', 'evolved'].map(k => `<label class="field"><span>${{ baby: '孵化成寶寶', junior: '少年', adult: '成年', evolved: '進化' }[k]}</span><input class="input num" id="th-${k}" name="${k}" type="number" min="1" value="${th[k]}" required></label>`).join('')}</div>
           <label class="field" style="max-width:320px"><span>幾多個上課日冇加分，寵物就會肚餓（周末唔計）</span>
             <select class="input" id="th-hunger" name="hunger_days">${[0, 2, 3, 4, 5, 7].map(n => `<option value="${n}"${n === hungerDays() ? ' selected' : ''}>${n ? n + ' 日（' + n * 2 + ' 日叫主人幫忙）' : '關閉肚餓提示'}</option>`).join('')}</select></label>
+          <label class="field" style="max-width:320px"><span>欠交功課幾多個上課日，寵物就會冰封（周末唔計）</span>
+            <select class="input" id="th-lock" name="lock_days">${[0, 2, 3, 4, 5, 7].map(n => `<option value="${n}"${n === lockDays() ? ' selected' : ''}>${n ? n + ' 日' : '關閉冰封'}</option>`).join('')}</select></label>
           <p class="muted small" style="margin:0">調低門檻會令已達標的寵物即時升級；調高門檻不會令寵物退化。扣分及撤銷都不會令寵物倒退。</p>
           <button class="btn primary">儲存門檻</button></form></section>
       <section class="panel"><h2>行為標籤</h2>
@@ -1604,8 +1673,8 @@ function renderSettings() {
     </div>`);
   ACT['submit:th'] = async (_f, fd) => {
     const all = Object.fromEntries([...fd].map(([k, v]) => [k, Number(v)]));
-    const { hunger_days, ...thr } = all;
-    const r = await PUT('/settings', { thresholds: thr, hunger_days });
+    const { hunger_days, lock_days, ...thr } = all;
+    const r = await PUT('/settings', { thresholds: thr, hunger_days, lock_days });
     await reloadBoot(); state.cls = null; state.classId = null; toast(r.upgraded ? `已儲存，${r.upgraded} 隻寵物即時升級` : '已儲存門檻'); renderSettings();
   };
   ACT['submit:newtag'] = async (_f, fd) => { await POST('/tags', Object.fromEntries(fd)); await reloadBoot(); renderSettings(); };

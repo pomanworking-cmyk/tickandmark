@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS settings (
   teacher_id  INTEGER PRIMARY KEY REFERENCES teachers(id) ON DELETE CASCADE,
   thresholds  TEXT NOT NULL,              -- JSON {baby, junior, adult, evolved}
   timer_presets TEXT NOT NULL DEFAULT '[60,180,300,600]',
-  hunger_days INTEGER NOT NULL DEFAULT 3   -- 幾多個上課日冇加分，寵物就會肚餓（0 = 關閉）
+  hunger_days INTEGER NOT NULL DEFAULT 3,  -- 幾多個上課日冇加分，寵物就會肚餓（0 = 關閉）
+  lock_days   INTEGER NOT NULL DEFAULT 3   -- 欠交功課幾多個上課日，寵物就會冰封（0 = 關閉）
 );
 
 CREATE TABLE IF NOT EXISTS classes (
@@ -108,6 +109,7 @@ CREATE TABLE IF NOT EXISTS student_pets (
   accessories       TEXT NOT NULL DEFAULT '[]',   -- 預留：飾物 JSON
   assigned_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   hatched_at        TEXT,
+  unlocked_at       TEXT,                         -- 老師最後一次解除冰封的時間
   updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
@@ -136,6 +138,8 @@ CREATE TABLE IF NOT EXISTS homework_submissions (
   student_id  INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
   status      TEXT NOT NULL CHECK (status IN ('submitted','late','missing','excused')),
   updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  missing_since TEXT,   -- 記為「欠交」的時間（用嚟計冰封）
+  missing_until TEXT,   -- 由「欠交」改為其他狀態的時間
   PRIMARY KEY (homework_id, student_id)
 );
 

@@ -2,7 +2,7 @@
 // 只用於預覽連結（沒有真伺服器時）。寵物規則同樣取自 shared/pet-logic.js。
 import {
   SPECIES_KEYS, STAGES, DEFAULT_THRESHOLDS, normalizeThresholds, nextStage, stageForXp,
-  stageIndex, isXpEligible, balancedSpecies,
+  stageIndex, isXpEligible, balancedSpecies, lockInfo, DEFAULT_LOCK_DAYS,
 } from '../shared/pet-logic.js';
 
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
@@ -30,7 +30,15 @@ export function createDemoBackend(initial) {
     const p = S.student_pets.find(p => p.student_record_id === sid); if (!p) return null;
     const { id, student_record_id, species_key, stage, xp, baseline_event_id, nickname, accessories, assigned_at, hatched_at } = p;
     const fed = S.pet_xp_ledger.filter(l => l.pet_id === id && !l.reversed_at).map(l => S.score_events.find(e => e.id === l.score_event_id)?.created_at).filter(Boolean).sort();
-    return clone({ id, student_record_id, species_key, stage, xp, baseline_event_id, nickname, accessories, assigned_at, hatched_at, last_fed_at: fed.length ? fed[fed.length - 1] : null });
+    const li = lockOf(p);
+    return clone({ id, student_record_id, species_key, stage, xp, baseline_event_id, nickname, accessories, assigned_at, hatched_at, last_fed_at: fed.length ? fed[fed.length - 1] : null,
+      unlocked_at: p.unlocked_at ?? null, locked: li.locked, lock_titles: li.titles });
+  };
+  // 冰封：與伺服器相同，由欠交紀錄即時計出
+  const lockOf = (p) => {
+    const rows = S.homework_submissions.filter(x => x.student_id === p.student_record_id && (x.status === 'missing' || x.missing_until))
+      .map(x => ({ status: x.status, since: x.missing_since ?? null, until: x.missing_until ?? null, updated_at: x.updated_at, title: S.homework.find(h => h.id === x.homework_id)?.title }));
+    return lockInfo(p, rows, settingsOf(p.teacher_id)?.lock_days ?? DEFAULT_LOCK_DAYS);
   };
   const spentOf = (sid) => S.redemptions.filter(r => r.student_id === sid && !r.undone_at).reduce((a, r) => a + r.cost, 0);
   const studentFull = (sid) => { const s = S.students.find(s => s.id === sid); return { ...clone(s), spent: spentOf(sid), pet: petOf(sid) }; };
@@ -40,7 +48,7 @@ export function createDemoBackend(initial) {
   const ledgerOf = (eid) => S.pet_xp_ledger.find(l => l.score_event_id === eid);
 
   function seedTeacher(tid) {
-    S.settings.push({ teacher_id: tid, thresholds: { ...DEFAULT_THRESHOLDS }, timer_presets: [60, 180, 300, 600], hunger_days: 3 });
+    S.settings.push({ teacher_id: tid, thresholds: { ...DEFAULT_THRESHOLDS }, timer_presets: [60, 180, 300, 600], hunger_days: 3, lock_days: 3 });
     [['專心上課', 1, '👂'], ['積極舉手', 1, '✋'], ['幫助同學', 2, '🤝'], ['功課認真', 2, '📘'],
       ['收拾整齊', 1, '🧹'], ['欠交功課', -1, '📕'], ['不守秩序', -1, '🔇']]
       .forEach(([label, points, icon], sort) => insert('behavior_tags', { teacher_id: tid, label, points, icon, sort }));
@@ -87,7 +95,7 @@ export function createDemoBackend(initial) {
     routes.push({ method, re, keys, fn });
   };
 
-  on('GET', '/bootstrap', ({ tid }) => ({ thresholds: thresholdsOf(tid), hunger_days: settingsOf(tid).hunger_days, timer_presets: settingsOf(tid).timer_presets,
+  on('GET', '/bootstrap', ({ tid }) => ({ thresholds: thresholdsOf(tid), hunger_days: settingsOf(tid).hunger_days, lock_days: settingsOf(tid).lock_days ?? DEFAULT_LOCK_DAYS, timer_presets: settingsOf(tid).timer_presets,
     tags: clone(S.behavior_tags.filter(t => t.teacher_id === tid).sort((a, b) => a.sort - b.sort || a.id - b.id)), classes: listClasses(tid),
     homework_templates: listTemplates(tid), rewards: listRewards(tid) }));
   on('GET', '/classes/:id/attendance', ({ tid, p, q }) => {
@@ -299,7 +307,7 @@ export function createDemoBackend(initial) {
         const event = insert('score_events', { teacher_id: tid, class_id: c.id, student_id: sid, batch_id: b.id, kind: 'point', delta, tag_id: tag?.id ?? null, reason, undone_at: null });
         s.score += delta;
         const pet = S.student_pets.find(x => x.student_record_id === sid);
-        if (isXpEligible(event, pet) && !ledgerOf(event.id)) {
+        if (isXpEligible(event, pet) && !ledgerOf(event.id) && !lockOf(pet).locked) {
           const xp = pet.xp + delta; const stage = nextStage(pet.stage, xp, th);
           S.pet_xp_ledger.push({ score_event_id: event.id, pet_id: pet.id, xp: delta, stage_before: pet.stage, stage_after: stage, reversed_at: null });
           if (pet.stage === 'egg' && stage !== 'egg' && !pet.hatched_at) pet.hatched_at = now();
@@ -371,16 +379,18 @@ export function createDemoBackend(initial) {
     if (body.accessories !== undefined) { if (!Array.isArray(body.accessories)) throw bad('飾物格式錯誤'); pet.accessories = body.accessories.slice(0, 10).map(x => str(x, 30)); }
     pet.updated_at = now(); return studentFull(pet.student_record_id);
   });
+  on('POST', '/pets/:id/unlock', ({ tid, p }) => { const pet = own('student_pets', p.id, tid); pet.unlocked_at = now(); pet.updated_at = now(); return studentFull(pet.student_record_id); });
   on('DELETE', '/pets/:id', ({ tid, p }) => { own('student_pets', p.id, tid); S.student_pets = S.student_pets.filter(x => x.id !== p.id); S.pet_xp_ledger = S.pet_xp_ledger.filter(l => l.pet_id !== p.id); return { ok: true }; });
   on('PUT', '/settings', ({ tid, body }) => {
     let th; try { th = normalizeThresholds(body.thresholds); } catch (e) { throw bad(e.message); }
     const st = settingsOf(tid);
     if (body.hunger_days !== undefined) { const hd = int(body.hunger_days); if (!(hd >= 0 && hd <= 30)) throw bad('肚餓提示日數須為 0 至 30（0 = 關閉）'); st.hunger_days = hd; }
+    if (body.lock_days !== undefined) { const ld = int(body.lock_days); if (!(ld >= 0 && ld <= 30)) throw bad('冰封日數須為 0 至 30（0 = 關閉）'); st.lock_days = ld; }
     st.thresholds = th;
     if (Array.isArray(body.timer_presets)) st.timer_presets = body.timer_presets.map(int).filter(n => n > 0 && n <= 7200).slice(0, 8);
     let upgraded = 0;
     S.student_pets.filter(x => x.teacher_id === tid).forEach(pet => { const s = nextStage(pet.stage, pet.xp, th); if (s !== pet.stage) { upgraded++; pet.stage = s; pet.hatched_at ||= now(); } });
-    return { thresholds: th, upgraded, hunger_days: st.hunger_days };
+    return { thresholds: th, upgraded, hunger_days: st.hunger_days, lock_days: st.lock_days };
   });
   on('GET', '/audit', ({ tid }) => {
     const th = thresholdsOf(tid); const problems = [];
@@ -423,8 +433,15 @@ export function createDemoBackend(initial) {
     const h = own('homework', p.id, tid);
     txn(() => { for (const e of body.entries || []) {
       const s = own('students', int(e.student_id), tid); if (s.class_id !== h.class_id) throw bad('學生不屬於此班');
-      S.homework_submissions = S.homework_submissions.filter(x => !(x.homework_id === h.id && x.student_id === s.id));
-      if (e.status) { if (!['submitted', 'late', 'missing', 'excused'].includes(e.status)) throw bad('未知提交狀態'); S.homework_submissions.push({ homework_id: h.id, student_id: s.id, status: e.status, updated_at: now() }); }
+      const old = S.homework_submissions.find(x => x.homework_id === h.id && x.student_id === s.id);
+      S.homework_submissions = S.homework_submissions.filter(x => x !== old);
+      if (e.status) {
+        if (!['submitted', 'late', 'missing', 'excused'].includes(e.status)) throw bad('未知提交狀態');
+        const t = now(); const wasMissing = old?.status === 'missing';
+        const missing_since = e.status === 'missing' ? (wasMissing ? (old.missing_since ?? old.updated_at) : t) : (old?.missing_since ?? null);
+        const missing_until = e.status === 'missing' ? null : wasMissing ? t : (old?.missing_until ?? null);
+        S.homework_submissions.push({ homework_id: h.id, student_id: s.id, status: e.status, updated_at: t, missing_since, missing_until });
+      }
     } });
     return { ok: true };
   });

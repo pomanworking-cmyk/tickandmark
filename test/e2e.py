@@ -463,6 +463,31 @@ try:
         check('學生頁顯示寵物說話', '幫幫我' in page.inner_text('.pet-card .speech') or '孵化' in page.inner_text('.pet-card .speech'), page.inner_text('.pet-card .speech'))
         page.screenshot(path=f'{OUT}/hungry-student.png', full_page=True)
 
+        # 欠交功課冰封：4A 有一位欠交「數學工作紙」，把記欠交時間推前 10 日
+        a4 = api(page, 'GET', f"/classes/{ids['4A']}/full")['students']
+        hw4 = api(page, 'GET', f"/classes/{ids['4A']}/homework")
+        miss_ids = [x['student_id'] for h in hw4 for x in api(page, 'GET', f"/homework/{h['id']}/submissions")['entries'] if x['status'] == 'missing']
+        lk = next(x for x in a4 if x['id'] in miss_ids and x['pet'])
+        con = sqlite3.connect(db); con.execute(f"UPDATE homework_submissions SET missing_since = strftime('%Y-%m-%dT%H:%M:%fZ','now','-10 days') WHERE student_id = {lk['id']}"); con.commit(); con.close()
+        goto(page, BASE + '#/classes'); goto(page, BASE + f"#/c/{ids['4A']}/room"); page.wait_for_selector('#room-grid .stu')
+        check('冰封：欠交超過 3 日嘅寵物變灰加鎖', page.locator(f'.stu[data-id="{lk["id"]}"] .avatar.locked .lock-badge').count() == 1 and page.locator('#room-grid .avatar.locked').count() == 1)
+        check('冰封：工具列顯示冰封寵物 1', page.is_visible('#lock-pill') and '1' in page.inner_text('#lock-pill'))
+        page.screenshot(path=f'{OUT}/locked-room.png')
+        if page.locator('.qchip[data-q="menu"]').count(): page.click('.qchip[data-q="menu"]')
+        page.click(f'.stu[data-id="{lk["id"]}"]', position={'x': 20, 'y': 12}); page.wait_for_selector('dialog .lock-banner')
+        page.click('dialog .quick [data-d="1"]'); page.wait_for_selector('.cele-card .lock-line')
+        after_lk = api(page, 'GET', f"/students/{lk['id']}")['student']
+        check('冰封中加分：分數照加，XP 唔加', after_lk['score'] == lk['score'] + 1 and after_lk['pet']['xp'] == lk['pet']['xp'], f"{after_lk['score']} xp {after_lk['pet']['xp']}")
+        page.click('.cele-card'); page.wait_for_timeout(200)
+        page.click('#lock-pill'); page.click('dialog [data-unlock]'); page.wait_for_selector('#uq-text')
+        q1 = page.inner_text('#uq-text'); page.click('#uq-next'); page.fill('#uq-own', '今日學咗咩成語？')
+        check('解鎖：顯示問題，可換題及自己出題', bool(q1) and page.inner_text('#uq-text') == '今日學咗咩成語？' and not page.is_visible('#uq-show'))
+        page.screenshot(path=f'{OUT}/unlock-question.png')
+        page.click('#uq-ok'); page.wait_for_selector('text=解鎖成功'); page.wait_for_timeout(1900)
+        check('解鎖後寵物回復顏色', page.locator(f'.stu[data-id="{lk["id"]}"] .avatar.locked').count() == 0 and api(page, 'GET', f"/students/{lk['id']}")['student']['pet']['locked'] is False)
+        r_after = api(page, 'POST', '/points', {'class_id': ids['4A'], 'student_ids': [lk['id']], 'delta': 1, 'client_batch_id': 'unlock-xp'})
+        check('解鎖後加分再計 XP', r_after['results'][0]['xp_gained'] == 1)
+
         # 手機及平板
         for name, vp in [('mobile', {'width': 390, 'height': 844}), ('tablet', {'width': 820, 'height': 1180})]:
             m = br.new_context(viewport=vp, storage_state=ctx.storage_state(), color_scheme='dark').new_page()  # 系統深色模式下仍應是淺色

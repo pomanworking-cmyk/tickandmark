@@ -461,3 +461,66 @@ test('批量刪除學生：連同紀錄一併刪除；其他老師及其他班�
   assert.equal(r2.status, 404);
   const audit = await call('GET', '/audit'); assert.ok(audit.ok !== false);
 });
+
+test('欠交功課冰封：超過 3 個上課日變灰、XP 暫停、老師解鎖；規則單元測試', async () => {
+  const { lockInfo, addSchoolDays, hkDate } = await import('../public/shared/pet-logic.js');
+  // 單元：星期一（10/12）記欠交 → 星期四（10/15）冰封；週末唔計
+  assert.equal(addSchoolDays('2026-10-12', 3), '2026-10-15');
+  assert.equal(addSchoolDays('2026-10-15', 3), '2026-10-20');
+  const row = { status: 'missing', since: '2026-10-12T01:00:00Z', title: '作文' };
+  const at = (d) => new Date(d + 'T04:00:00Z');
+  assert.equal(lockInfo({}, [row], 3, at('2026-10-14')).locked, false);
+  assert.equal(lockInfo({}, [row], 3, at('2026-10-15')).locked, true);
+  assert.equal(lockInfo({}, [row], 0, at('2026-10-30')).locked, false, '0 = 關閉');
+  assert.equal(lockInfo({ unlocked_at: '2026-10-16T02:00:00Z' }, [row], 3, at('2026-10-20')).locked, false, '解鎖後同一份欠交唔再冰封');
+  assert.equal(lockInfo({}, [{ ...row, status: 'submitted', until: '2026-10-13T03:00:00Z' }], 3, at('2026-10-20')).locked, false, '限期前交咗');
+  assert.equal(lockInfo({}, [{ ...row, status: 'submitted', until: '2026-10-16T03:00:00Z' }], 3, at('2026-10-20')).locked, true, '過咗期先交，要老師解鎖');
+  assert.equal(lockInfo({}, [{ ...row, status: 'excused', until: '2026-10-16T03:00:00Z' }], 3, at('2026-10-20')).locked, false, '豁免唔計');
+  assert.equal(hkDate('2026-10-12T17:00:00Z'), '2026-10-13', '用香港日期');
+
+  // 整合：伺服器
+  const { openSqlite } = await import('../server/db-sqlite.js');
+  const { createApp } = await import('../server/app.js');
+  const db = openSqlite(':memory:');
+  const app = createApp({ db, allowRegistration: true });
+  let cookie = '';
+  const call = async (method, path, body) => {
+    const r = await app({ method, path, query: {}, headers: { 'x-tm': '1', cookie }, bodyText: body ? JSON.stringify(body) : '', ip: '1' });
+    const sc = r.headers['Set-Cookie']; if (sc) cookie = sc.split(';')[0];
+    if (r.status >= 400) { const e = new Error(r.body.error); e.status = r.status; throw e; }
+    return r.body;
+  };
+  await call('POST', '/auth/register', { email: 'l@x.hk', name: 'L', password: 'Password123' });
+  const c = await call('POST', '/classes', { name: '2A' });
+  const { created: [a, b] } = await call('POST', `/classes/${c.id}/students`, { students: [{ name: 'A' }, { name: 'B' }] });
+  await call('POST', '/pets/assign', { student_ids: [a.id, b.id], species_key: 'fire_fox' });
+  const hw = await call('POST', `/classes/${c.id}/homework`, { title: '周記' });
+  await call('PUT', `/homework/${hw.id}/submissions`, { entries: [{ student_id: a.id, status: 'missing' }, { student_id: b.id, status: 'submitted' }] });
+  let full = await call('GET', `/classes/${c.id}/full`);
+  assert.equal(full.students.find(s => s.id === a.id).pet.locked, false, '啱啱記欠交未冰封');
+  // 模擬 10 日前記欠交
+  await db.run("UPDATE homework_submissions SET missing_since = strftime('%Y-%m-%dT%H:%M:%fZ','now','-10 days') WHERE student_id = ?", a.id);
+  full = await call('GET', `/classes/${c.id}/full`);
+  const pa = full.students.find(s => s.id === a.id).pet;
+  assert.equal(pa.locked, true); assert.deepEqual(pa.lock_titles, ['周記']);
+  assert.equal(full.students.find(s => s.id === b.id).pet.locked, false);
+  // 冰封中加分：分數照加，XP 唔加
+  const r = await call('POST', '/points', { class_id: c.id, student_ids: [a.id, b.id], delta: 2, client_batch_id: 'lk1' });
+  const ra = r.results.find(x => x.student_id === a.id); const rb = r.results.find(x => x.student_id === b.id);
+  assert.equal(ra.score, 2); assert.equal(ra.xp_gained, 0); assert.equal(ra.pet.xp, 0); assert.equal(ra.pet.locked, true);
+  assert.equal(rb.xp_gained, 2);
+  // 再記欠交（狀態不變）唔會重設冰封日期
+  await call('PUT', `/homework/${hw.id}/submissions`, { entries: [{ student_id: a.id, status: 'missing' }] });
+  assert.equal((await call('GET', `/students/${a.id}`)).student.pet.locked, true);
+  // 交返功課但過咗期：仍然冰封，要老師解鎖
+  await call('PUT', `/homework/${hw.id}/submissions`, { entries: [{ student_id: a.id, status: 'submitted' }] });
+  assert.equal((await call('GET', `/students/${a.id}`)).student.pet.locked, true);
+  const un = await call('POST', `/pets/${pa.id}/unlock`, {});
+  assert.equal(un.pet.locked, false); assert.ok(un.pet.unlocked_at);
+  const r2 = await call('POST', '/points', { class_id: c.id, student_ids: [a.id], delta: 3, client_batch_id: 'lk2' });
+  assert.equal(r2.results[0].xp_gained, 3);
+  // 設定：關閉冰封
+  const boot = await call('GET', '/bootstrap'); assert.equal(boot.lock_days, 3);
+  const st = await call('PUT', '/settings', { thresholds: boot.thresholds, lock_days: 0 }); assert.equal(st.lock_days, 0);
+  const audit = await call('GET', '/audit'); assert.deepEqual(audit.problems, []);
+});

@@ -129,3 +129,36 @@ export function hungerMessage(pet, level) {
   if (level === 1) return egg ? '好凍呀，想主人陪下我～' : '我有啲肚餓呀～';
   return egg ? '我好凍呀！主人快啲幫我孵化啦！' : '好肚餓呀！主人幫幫我！';
 }
+
+// ---------- 欠交功課冰封（寵物變灰，老師問一條問題後解鎖） ----------
+// 日子一律用香港日期計（伺服器喺外國都一樣），週末唔計。
+export const DEFAULT_LOCK_DAYS = 3;
+const HK_FMT = typeof Intl !== 'undefined' ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong', year: 'numeric', month: '2-digit', day: '2-digit' }) : null;
+export function hkDate(v) {
+  if (!v) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const d = v instanceof Date ? v : new Date(v); if (Number.isNaN(d.getTime())) return null;
+  return HK_FMT ? HK_FMT.format(d) : d.toISOString().slice(0, 10);
+}
+// 由 dateStr 起計第 n 個上課日（星期一至五）的日期
+export function addSchoolDays(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00Z'); let k = 0;
+  while (k < n) { d.setUTCDate(d.getUTCDate() + 1); const w = d.getUTCDay(); if (w !== 0 && w !== 6) k++; }
+  return d.toISOString().slice(0, 10);
+}
+// rows：該學生曾被記「欠交」的功課 [{ status, since（記欠交時間）, until（改為已交的時間）, updated_at, title }]
+// 欠交超過 days 個上課日仍未交（或過咗期限先交）就冰封；老師解鎖（unlocked_at）之後，只有新到期的欠交先會再冰封。
+export function lockInfo(pet, rows, days = DEFAULT_LOCK_DAYS, now = new Date()) {
+  const none = { locked: false, titles: [] };
+  if (!pet || !days || !Array.isArray(rows) || !rows.length) return none;
+  const today = hkDate(now); const unlock = hkDate(pet.unlocked_at);
+  const titles = [];
+  for (const r of rows) {
+    if (r.status === 'excused') continue; // 豁免唔計
+    const start = hkDate(r.since || r.updated_at); if (!start) continue;
+    const lockDate = addSchoolDays(start, days);
+    const hit = r.status === 'missing' ? today >= lockDate : !!(r.until && hkDate(r.until) >= lockDate);
+    if (hit && (!unlock || lockDate > unlock)) titles.push(r.title);
+  }
+  return titles.length ? { locked: true, titles } : none;
+}
