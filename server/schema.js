@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS classes (
   name        TEXT NOT NULL,               -- 例如 4A
   school_year TEXT NOT NULL DEFAULT '',
   seat_cols   INTEGER NOT NULL DEFAULT 6,   -- 座位表每行座位數
+  thresholds  TEXT,                         -- 本班寵物升級門檻 JSON；NULL = 跟老師預設
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 

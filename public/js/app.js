@@ -1,7 +1,7 @@
 // Tick and Mark 前端（繁體中文單頁應用）
 import { GET, POST, PUT, PATCH, DEL, uid, IS_DEMO } from './api.js';
 import { esc, $, $$, avatar, dexImage, xpBar, petStatus, toast, openDialog, confirmBox, celebrate, ICON, fmtDate, fmtTime, signed } from './ui.js';
-import { SPECIES, STAGES, STAGE_LABELS, speciesByKey, petLabel, progressInfo, hungerLevel, hungerMessage, schoolDaysBetween } from '../shared/pet-logic.js';
+import { SPECIES, STAGES, STAGE_LABELS, speciesByKey, petLabel, progressInfo, hungerLevel, hungerMessage, schoolDaysBetween, normalizeThresholds } from '../shared/pet-logic.js';
 import { readFileToStudents, textToStudents, ocrImage } from './importer.js';
 
 const app = document.getElementById('app');
@@ -18,7 +18,9 @@ const room = {
 const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 let ACT = {};
 const go = (h) => { if (location.hash === h) route(); else location.hash = h; };
-const thresholds = () => state.boot?.thresholds;
+// 寵物升級門檻：本班有自訂就用本班，否則用老師預設
+const classTh = (c) => { try { return c?.thresholds ? normalizeThresholds(JSON.parse(c.thresholds)) : null; } catch { return null; } };
+const thresholds = () => classTh(state.cls?.class) || state.boot?.thresholds;
 const students = () => state.cls?.students || [];
 const groupOf = (s) => state.cls?.groups.find(g => g.id === s.group_id);
 const fail = (e) => { if (e.status === 401) { state.teacher = null; go('#/login'); } toast(e.message, { error: true }); };
@@ -1464,7 +1466,8 @@ function renderPets() {
   const counts = {}; list.forEach(s => { if (s.pet) counts[`${s.pet.species_key}/${s.pet.stage}`] = (counts[`${s.pet.species_key}/${s.pet.stage}`] || 0) + 1; });
   shell('pets', `
     <div class="page-head"><h1>${esc(state.cls.class.name)} 寵物</h1>
-      <span class="chip gold">孵化 ${th.baby} · 少年 ${th.junior} · 成年 ${th.adult} · 進化 ${th.evolved} XP</span><a class="btn sm" href="#/settings">修改門檻</a></div>
+      <span class="chip gold">孵化 ${th.baby} · 少年 ${th.junior} · 成年 ${th.adult} · 進化 ${th.evolved} XP</span>
+      <span class="chip ${classTh(state.cls.class) ? 'good' : ''}">${classTh(state.cls.class) ? '本班自訂' : '跟預設'}</span><button class="btn sm" data-act="classth">⚙️ 調校本班門檻</button></div>
     ${noPet.length ? `<section class="panel"><h2>派蛋（${noPet.length} 位未有寵物）</h2>
       <p class="muted small">每位學生只會看到自己獲派的蛋；派蛋之後的正向加分才會成為寵物 XP，之前的分數照樣保留。孵化前仍可更換品種。</p>
       <div class="species-pick" id="sp-pick"><button data-sp="balanced" aria-pressed="true"><span style="font-size:2rem;line-height:64px">🎲</span>平均分配</button>
@@ -1480,6 +1483,7 @@ function renderPets() {
         ${STAGES.map(st => `<div class="dex-cell">${dexImage(sp.key, st)}<div>${STAGE_LABELS[st]} <b>${counts[`${sp.key}/${st}`] || 0}</b></div></div>`).join('')}</div>`).join('')}</div></section>`);
   const pickBox = $('#sp-pick');
   if (pickBox) pickBox.onclick = (e) => { const b = e.target.closest('[data-sp]'); if (!b) return; pick = b.dataset.sp; $$('[data-sp]', pickBox).forEach(x => x.setAttribute('aria-pressed', x === b)); };
+  ACT.classth = () => classThresholdDialog();
   ACT.selall = () => $$('[data-np]').forEach(c => { c.checked = true; });
   ACT.selnone = () => $$('[data-np]').forEach(c => { c.checked = false; });
   ACT.assign = async () => {
@@ -1488,6 +1492,37 @@ function renderPets() {
     const r = await POST('/pets/assign', { student_ids: ids, species_key: pick });
     await reloadClass(); await reloadBoot(); toast(`已為 ${r.created.length} 位學生派蛋`); renderPets();
   };
+}
+
+// 本班升級門檻：每班可以唔同（例如低年級快啲孵化）
+function classThresholdDialog() {
+  const c = state.cls.class; const own = classTh(c); const th = own || state.boot.thresholds; const def = state.boot.thresholds;
+  const L = { baby: '孵化成寶寶', junior: '少年', adult: '成年', evolved: '進化' };
+  const d = openDialog(`<div class="sheet-head"><h2>⚙️ ${esc(c.name)} 寵物升級門檻</h2><button class="btn ghost" data-close>✕</button></div>
+    <p class="muted small" style="margin-top:0">寵物累積幾多 XP 就會成長。每班可以設定唔同門檻；未設定嘅班別跟「設定」頁嘅預設（孵化 ${def.baby} · 少年 ${def.junior} · 成年 ${def.adult} · 進化 ${def.evolved}）。</p>
+    <form class="stack" data-f>
+      <div class="th-grid">${Object.keys(L).map(k => `<label class="field"><span>${L[k]}</span><input class="input num" id="cth-${k}" name="${k}" type="number" min="1" max="100000" value="${th[k]}" required></label>`).join('')}</div>
+      <div class="th-presets"><span class="muted small">快速揀：</span>
+        <button type="button" class="btn sm" data-pre="0.5">快啲成長（×½）</button><button type="button" class="btn sm" data-pre="1">同預設一樣</button><button type="button" class="btn sm" data-pre="2">慢啲成長（×2）</button></div>
+      <p class="muted small" style="margin:0">調低門檻：已達標嘅寵物即時升級。調高門檻：寵物唔會退化。</p>
+      <div class="row" style="justify-content:flex-end">${own ? '<button type="button" class="btn" data-reset>跟返預設</button>' : ''}<button class="btn primary">儲存本班門檻</button></div>
+    </form>`);
+  d.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-pre]'); if (!b) return;
+    const k = Number(b.dataset.pre); const vals = {}; let prev = 0;
+    for (const key of Object.keys(L)) { vals[key] = Math.max(prev + 1, Math.round(def[key] * k)); prev = vals[key]; $(`#cth-${key}`, d).value = vals[key]; }
+  });
+  const save = async (thresholds) => {
+    const r = await PUT(`/classes/${c.id}/thresholds`, { thresholds });
+    d.close(); await reloadClass(); await reloadBoot();
+    toast(`${r.custom ? '已儲存本班門檻' : '已跟返預設門檻'}${r.upgraded ? `，${r.upgraded} 隻寵物即時升級` : ''}`); renderPets();
+  };
+  d.querySelector('[data-f]').onsubmit = async (e) => {
+    e.preventDefault(); const v = Object.fromEntries([...new FormData(e.target)].map(([k, x]) => [k, Number(x)]));
+    try { normalizeThresholds(v); } catch (err) { return toast(err.message, { error: true }); }
+    try { await save(v); } catch (err) { fail(err); }
+  };
+  d.querySelector('[data-reset]')?.addEventListener('click', () => save(null).catch(fail));
 }
 
 // ---------- 海報 ----------
@@ -1649,7 +1684,8 @@ function renderSettings() {
     <div class="page-head"><a class="btn ghost sm" href="#/classes">← 班別</a><h1>設定</h1><span class="muted">${esc(state.teacher.name)} · ${esc(state.teacher.email)}</span>
       <button class="btn" data-act="logout">登出</button></div>
     <div class="grid-2" style="align-items:start">
-      <section class="panel"><h2>寵物升級門檻（累積 XP）</h2>
+      <section class="panel"><h2>寵物升級門檻（累積 XP）・預設</h2>
+        <p class="muted small" style="margin-top:0">未自訂嘅班別用呢個門檻。想個別班別唔同（例如低年級快啲孵化），可以喺該班「寵物」頁撳「調校本班門檻」。</p>
         <form class="stack" data-form="th">
           <div class="row">${['baby', 'junior', 'adult', 'evolved'].map(k => `<label class="field"><span>${{ baby: '孵化成寶寶', junior: '少年', adult: '成年', evolved: '進化' }[k]}</span><input class="input num" id="th-${k}" name="${k}" type="number" min="1" value="${th[k]}" required></label>`).join('')}</div>
           <label class="field" style="max-width:320px"><span>幾多個上課日冇加分，寵物就會肚餓（周末唔計）</span>
@@ -1672,7 +1708,7 @@ function renderSettings() {
           <label class="field"><span>獎勵</span><input class="input" id="nr-title" name="title" maxlength="20" required placeholder="例如：玩桌遊"></label>
           <label class="field" style="flex:0 0 90px"><span>分數</span><input class="input num" id="nr-cost" name="cost" type="number" min="1" max="1000" value="10" required></label><button class="btn blue">新增</button></form></section>
       <section class="panel"><h2>班別</h2>
-        <div class="stack" style="gap:6px">${state.boot.classes.map(c => `<div class="status-row"><span class="who">${esc(c.name)} <span class="muted small">${esc(c.school_year)} · ${c.student_count} 人</span></span>
+        <div class="stack" style="gap:6px">${state.boot.classes.map(c => `<div class="status-row"><span class="who">${esc(c.name)} <span class="muted small">${esc(c.school_year)} · ${c.student_count} 人</span>${classTh(c) ? ` <a class="chip good small" href="#/c/${c.id}/pets" title="本班自訂寵物門檻">門檻自訂：孵化 ${classTh(c).baby}・少年 ${classTh(c).junior}・成年 ${classTh(c).adult}・進化 ${classTh(c).evolved}</a>` : ''}</span>
           <button class="btn sm" data-act="renclass" data-id="${c.id}">改名</button><button class="btn sm danger" data-act="delclass" data-id="${c.id}">刪除</button></div>`).join('')}</div></section>
       <section class="panel"><h2>資料一致性檢查</h2><p class="muted small">核對每隻寵物的 XP、階段及每位學生的總分是否與紀錄完全相符。</p>
         <button class="btn" data-act="audit">立即檢查</button><div id="audit-out" style="margin-top:10px"></div></section>

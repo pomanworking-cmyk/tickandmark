@@ -516,6 +516,18 @@ try:
         page.check('#ssel-all'); check('全選', page.inner_text('#ssel-count') == f'已選 {before - 2} 位')
         page.uncheck('#ssel-all')
 
+        # 每班自訂寵物門檻
+        goto(page, BASE + f"#/c/{ids['6C']}/pets"); page.click('[data-act=classth]'); page.wait_for_selector('#cth-baby')
+        page.click('dialog [data-pre="0.5"]'); page.click('dialog button:has-text("儲存本班門檻")'); page.wait_for_selector('text=已儲存本班門檻')
+        wait_js(page, "document.body.innerText.includes('本班自訂')")
+        c6 = api(page, 'GET', f"/classes/{ids['6C']}/full")['class']; c4 = api(page, 'GET', f"/classes/{ids['4A']}/full")['class']
+        boot_th = api(page, 'GET', '/bootstrap')['thresholds']
+        check('每班門檻：6C 自訂（減半），4A 跟預設', c6['thresholds'] and json.loads(c6['thresholds'])['baby'] == max(1, round(boot_th['baby'] * 0.5)) and c4['thresholds'] is None, str(c6['thresholds']))
+        check('每班門檻：寵物頁顯示本班門檻', f"孵化 {json.loads(c6['thresholds'])['baby']} ·" in page.inner_text('main'))
+        page.screenshot(path=f'{OUT}/class-thresholds.png')
+        page.click('[data-act=classth]'); page.click('dialog [data-reset]'); page.wait_for_selector('text=已跟返預設門檻')
+        check('每班門檻：可以跟返預設', api(page, 'GET', f"/classes/{ids['6C']}/full")['class']['thresholds'] is None)
+
         # 私隱：另一位老師
         other = br.new_context().new_page(); other.goto(BASE)
         other.evaluate("fetch('/api/auth/register', { method: 'POST', headers: { 'content-type': 'application/json', 'x-tm': '1' }, body: JSON.stringify({ email: 'lee@school.edu.hk', name: '李老師', password: 'Password123' }) })")

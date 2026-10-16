@@ -55,6 +55,8 @@ export function createApi(db) {
     const row = (await db.get('SELECT thresholds FROM settings WHERE teacher_id = ?', tid));
     return row ? normalizeThresholds(JSON.parse(row.thresholds)) : { ...DEFAULT_THRESHOLDS };
   };
+  // 每班可以有自己嘅升級門檻；未設定就跟老師預設
+  const classThresholds = async (c, tid) => (c?.thresholds ? normalizeThresholds(JSON.parse(c.thresholds)) : await thresholdsOf(tid));
   const petRow = (p) => p && ({
     id: p.id, student_record_id: p.student_record_id, species_key: p.species_key, stage: p.stage,
     xp: p.xp, baseline_event_id: p.baseline_event_id, nickname: p.nickname,
@@ -316,7 +318,8 @@ export function createApi(db) {
     const exams = (await db.all(`SELECT x.id, x.title, x.subject, x.full_mark, x.exam_date, es.score
       FROM exams x LEFT JOIN exam_scores es ON es.exam_id = x.id AND es.student_id = ?
       WHERE x.class_id = ? ORDER BY x.exam_date DESC, x.id DESC`, s.id, s.class_id));
-    return { student: await studentFull(s.id), class: await own('classes', s.class_id, tid), events, homework, exams, thresholds: await thresholdsOf(tid) };
+    const cls = await own('classes', s.class_id, tid);
+    return { student: await studentFull(s.id), class: cls, events, homework, exams, thresholds: await classThresholds(cls, tid) };
   });
   on('PATCH', '/students/:id', async ({ tid, p, body }) => {
     const s = await own('students', p.id, tid);
@@ -438,7 +441,8 @@ export function createApi(db) {
     if (!delta || Math.abs(delta) > 100) throw bad('分數必須是 -100 至 100 的整數（不可為 0）');
     const ids = [...new Set((body.student_ids || []).map(int))];
     if (!ids.length) throw bad('請選擇學生');
-    const th = thr.rows[0] ? normalizeThresholds(JSON.parse(thr.rows[0].thresholds)) : { ...DEFAULT_THRESHOLDS };
+    const th = c.thresholds ? normalizeThresholds(JSON.parse(c.thresholds))
+      : thr.rows[0] ? normalizeThresholds(JSON.parse(thr.rows[0].thresholds)) : { ...DEFAULT_THRESHOLDS };
     const reason = str(body.reason, 60);
     const label = tag ? `${tag.icon} ${tag.label}` : (reason || (delta > 0 ? `加 ${delta} 分` : `扣 ${-delta} 分`));
 
@@ -594,7 +598,9 @@ export function createApi(db) {
         (await db.run('UPDATE settings SET lock_days = ? WHERE teacher_id = ?', ld, tid));
       }
       if (Array.isArray(body.timer_presets)) (await db.run('UPDATE settings SET timer_presets = ? WHERE teacher_id = ?', JSON.stringify(body.timer_presets.map(int).filter(n => n > 0 && n <= 7200).slice(0, 8)), tid));
-      for (const pet of (await db.all('SELECT * FROM student_pets WHERE teacher_id = ?', tid))) {
+      // 只影響跟預設門檻嘅班別；有自訂門檻嘅班別不變
+      for (const pet of (await db.all(`SELECT p.* FROM student_pets p JOIN students s ON s.id = p.student_record_id JOIN classes c ON c.id = s.class_id
+          WHERE p.teacher_id = ? AND c.thresholds IS NULL`, tid))) {
         const st = nextStage(pet.stage, pet.xp, th);
         if (st !== pet.stage) {
           upgraded++;
@@ -606,14 +612,34 @@ export function createApi(db) {
     return { thresholds: th, upgraded, hunger_days: st.hunger_days, lock_days: st.lock_days };
   });
 
+  // 本班升級門檻：thresholds = {baby, junior, adult, evolved}，或 null（跟返預設）
+  on('PUT', '/classes/:id/thresholds', async ({ tid, p, body }) => {
+    const c = await own('classes', p.id, tid);
+    let custom = null;
+    if (body.thresholds) { try { custom = normalizeThresholds(body.thresholds); } catch (e) { throw bad(e.message); } }
+    const th = custom || await thresholdsOf(tid);
+    let upgraded = 0;
+    await db.tx(async () => {
+      (await db.run('UPDATE classes SET thresholds = ? WHERE id = ?', custom ? JSON.stringify(custom) : null, c.id));
+      // 調低門檻：已達標嘅寵物即時升級；調高門檻：唔會退化
+      const pets = await db.all('SELECT p.* FROM student_pets p JOIN students s ON s.id = p.student_record_id WHERE s.class_id = ?', c.id);
+      const ups = pets.map(pet => [pet, nextStage(pet.stage, pet.xp, th)]).filter(([pet, st]) => st !== pet.stage);
+      upgraded = ups.length;
+      await db.batch(ups.map(([pet, st]) => ['UPDATE student_pets SET stage = ?, updated_at = ?, hatched_at = COALESCE(hatched_at, ?) WHERE id = ?', st, now(), now(), pet.id]));
+    });
+    return { class: await own('classes', c.id, tid), thresholds: th, custom: !!custom, upgraded };
+  });
+
   // 資料一致性自我檢查（驗收用）
   on('GET', '/audit', async ({ tid }) => {
-    const th = await thresholdsOf(tid); const problems = [];
-    const pets = (await db.all('SELECT * FROM student_pets WHERE teacher_id = ?', tid));
+    const teacherTh = await thresholdsOf(tid); const problems = [];
+    const pets = (await db.all(`SELECT p.*, c.thresholds AS class_th FROM student_pets p JOIN students s ON s.id = p.student_record_id
+      JOIN classes c ON c.id = s.class_id WHERE p.teacher_id = ?`, tid));
     const ledgerSum = new Map((await db.all('SELECT l.pet_id, SUM(l.xp) s FROM pet_xp_ledger l JOIN student_pets p ON p.id = l.pet_id WHERE p.teacher_id = ? AND l.reversed_at IS NULL GROUP BY l.pet_id', tid)).map(r => [r.pet_id, r.s]));
     const badCount = new Map((await db.all(`SELECT l.pet_id, COUNT(*) n FROM pet_xp_ledger l JOIN score_events e ON e.id = l.score_event_id JOIN student_pets p ON p.id = l.pet_id
         WHERE p.teacher_id = ? AND (e.student_id <> p.student_record_id OR e.delta <= 0 OR e.kind <> 'point' OR e.id <= p.baseline_event_id OR l.xp <> e.delta) GROUP BY l.pet_id`, tid)).map(r => [r.pet_id, r.n]));
     for (const p of pets) {
+      const th = p.class_th ? normalizeThresholds(JSON.parse(p.class_th)) : teacherTh;
       const sum = ledgerSum.get(p.id) || 0;
       if (sum !== p.xp) problems.push(`寵物 ${p.id}：XP ${p.xp} 與入帳總和 ${sum} 不符`);
       if (!SPECIES_KEYS.includes(p.species_key)) problems.push(`寵物 ${p.id}：未知品種`);

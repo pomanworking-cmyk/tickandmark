@@ -529,3 +529,59 @@ test('欠交功課冰封：超過 3 個上課日變灰、XP 暫停、老師解�
   const st = await call('PUT', '/settings', { thresholds: boot.thresholds, lock_days: 0 }); assert.equal(st.lock_days, 0);
   const audit = await call('GET', '/audit'); assert.deepEqual(audit.problems, []);
 });
+
+test('每班可以自訂寵物升級門檻（伺服器與示範後端一致）', async () => {
+  const { openSqlite } = await import('../server/db-sqlite.js');
+  const { createApp } = await import('../server/app.js');
+  const server = () => {
+    const db = openSqlite(':memory:'); const app = createApp({ db, allowRegistration: true }); let cookie = '';
+    return async (method, path, body) => {
+      const r = await app({ method, path, query: {}, headers: { 'x-tm': '1', cookie }, bodyText: body ? JSON.stringify(body) : '', ip: '1' });
+      const sc = r.headers['Set-Cookie']; if (sc) cookie = sc.split(';')[0];
+      if (r.status >= 400) { const e = new Error(r.body.error); e.status = r.status; throw e; }
+      return r.body;
+    };
+  };
+  const demo = () => { const be = createDemoBackend(); return (m, p, b) => be.request(m, p, b); };
+  const run = async (call) => {
+    const out = {};
+    await call('POST', '/auth/register', { email: 't@x.hk', name: 'T', password: 'Password123' });
+    const a = await call('POST', '/classes', { name: '1A' }); const b = await call('POST', '/classes', { name: '6A' });
+    const sa = (await call('POST', `/classes/${a.id}/students`, { students: [{ name: 'A1' }, { name: 'A2' }] })).created;
+    const sb = (await call('POST', `/classes/${b.id}/students`, { students: [{ name: 'B1' }] })).created;
+    await call('POST', '/pets/assign', { student_ids: [...sa, ...sb].map(s => s.id), species_key: 'water_koi' });
+    await call('POST', '/points', { class_id: a.id, student_ids: sa.map(s => s.id), delta: 3, client_batch_id: 'p1' });
+    await call('POST', '/points', { class_id: b.id, student_ids: [sb[0].id], delta: 3, client_batch_id: 'p2' });
+    // 1A（低年級）門檻調低：已有 3 XP 即時孵化
+    const r1 = await call('PUT', `/classes/${a.id}/thresholds`, { thresholds: { baby: 2, junior: 6, adult: 12, evolved: 25 } });
+    out.r1 = { custom: r1.custom, upgraded: r1.upgraded, th: r1.thresholds };
+    out.aStages = (await call('GET', `/classes/${a.id}/full`)).students.map(s => s.pet.stage);
+    out.bStages = (await call('GET', `/classes/${b.id}/full`)).students.map(s => s.pet.stage);
+    out.aClassTh = JSON.parse((await call('GET', `/classes/${a.id}/full`)).class.thresholds);
+    // 加分用返本班門檻
+    const p3 = await call('POST', '/points', { class_id: a.id, student_ids: [sa[0].id], delta: 3, client_batch_id: 'p3' });
+    out.p3 = [p3.results[0].stage_before, p3.results[0].stage_after];
+    out.studentTh = (await call('GET', `/students/${sa[0].id}`)).thresholds;
+    // 改預設門檻：唔影響有自訂門檻嘅 1A
+    const st = await call('PUT', '/settings', { thresholds: { baby: 3, junior: 50, adult: 80, evolved: 120 } });
+    out.settingsUpgraded = st.upgraded;
+    out.bAfter = (await call('GET', `/classes/${b.id}/full`)).students.map(s => s.pet.stage);
+    out.aAfter = (await call('GET', `/classes/${a.id}/full`)).students.map(s => s.pet.stage);
+    // 跟返預設：唔會退化
+    const r2 = await call('PUT', `/classes/${a.id}/thresholds`, { thresholds: null });
+    out.r2 = { custom: r2.custom, th: r2.thresholds, cls: r2.class.thresholds };
+    out.aReset = (await call('GET', `/classes/${a.id}/full`)).students.map(s => s.pet.stage);
+    await assert.rejects(call('PUT', `/classes/${a.id}/thresholds`, { thresholds: { baby: 10, junior: 5, adult: 12, evolved: 25 } }));
+    out.audit = (await call('GET', '/audit')).problems;
+    return out;
+  };
+  const s = await run(server()); const d = await run(demo());
+  assert.deepEqual(s.r1, { custom: true, upgraded: 2, th: { baby: 2, junior: 6, adult: 12, evolved: 25 } });
+  assert.deepEqual(s.aStages, ['baby', 'baby']); assert.deepEqual(s.bStages, ['egg']);
+  assert.deepEqual(s.p3, ['baby', 'junior']);
+  assert.deepEqual(s.studentTh, { baby: 2, junior: 6, adult: 12, evolved: 25 });
+  assert.equal(s.settingsUpgraded, 1); assert.deepEqual(s.bAfter, ['baby']); assert.deepEqual(s.aAfter, ['junior', 'baby']);
+  assert.equal(s.r2.custom, false); assert.equal(s.r2.cls, null); assert.deepEqual(s.aReset, ['junior', 'baby'], '跟返預設唔會退化');
+  assert.deepEqual(s.audit, []);
+  assert.deepEqual(d, s, '示範後端與伺服器結果一致');
+});

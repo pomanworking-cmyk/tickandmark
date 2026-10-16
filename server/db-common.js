@@ -18,6 +18,7 @@ const UPGRADES = [
   ['homework_submissions', 'missing_since', 'TEXT'],
   ['homework_submissions', 'missing_until', 'TEXT'],
   ['student_pets', 'unlocked_at', 'TEXT'],
+  ['classes', 'thresholds', 'TEXT'],
 ];
 
 export async function initSchema(db) {

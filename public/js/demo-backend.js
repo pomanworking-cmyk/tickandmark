@@ -26,6 +26,8 @@ export function createDemoBackend(initial) {
 
   const settingsOf = (tid) => S.settings.find(s => s.teacher_id === tid);
   const thresholdsOf = (tid) => normalizeThresholds(settingsOf(tid)?.thresholds || DEFAULT_THRESHOLDS);
+  const classThresholds = (c, tid) => (c?.thresholds ? normalizeThresholds(JSON.parse(c.thresholds)) : thresholdsOf(tid));
+  const classOfStudent = (sid) => S.classes.find(c => c.id === S.students.find(s => s.id === sid)?.class_id);
   const petOf = (sid) => {
     const p = S.student_pets.find(p => p.student_record_id === sid); if (!p) return null;
     const { id, student_record_id, species_key, stage, xp, baseline_event_id, nickname, accessories, assigned_at, hatched_at } = p;
@@ -174,7 +176,7 @@ export function createDemoBackend(initial) {
   on('POST', '/homework-templates', ({ tid, body }) => { const title = str(body.title, 60); if (!title) throw bad('請輸入功課名稱'); addTemplate(tid, title, str(body.subject, 20)); return listTemplates(tid); });
   on('DELETE', '/homework-templates/:id', ({ tid, p }) => { own('homework_templates', p.id, tid); S.homework_templates = S.homework_templates.filter(t => t.id !== p.id); return listTemplates(tid); });
   on('GET', '/classes', ({ tid }) => listClasses(tid));
-  on('POST', '/classes', ({ tid, body }) => { const name = str(body.name, 30); if (!name) throw bad('請輸入班別名稱'); return clone(insert('classes', { teacher_id: tid, name, school_year: str(body.school_year, 20), seat_cols: 6 })); });
+  on('POST', '/classes', ({ tid, body }) => { const name = str(body.name, 30); if (!name) throw bad('請輸入班別名稱'); return clone(insert('classes', { teacher_id: tid, name, school_year: str(body.school_year, 20), seat_cols: 6, thresholds: null })); });
   on('PATCH', '/classes/:id', ({ tid, p, body }) => { const c = own('classes', p.id, tid); c.name = str(body.name ?? c.name, 30) || c.name; c.school_year = str(body.school_year ?? c.school_year, 20); return clone(c); });
   on('DELETE', '/classes/:id', ({ tid, p }) => {
     own('classes', p.id, tid);
@@ -237,7 +239,8 @@ export function createDemoBackend(initial) {
       .map(h => ({ id: h.id, title: h.title, subject: h.subject, due_date: h.due_date, status: S.homework_submissions.find(x => x.homework_id === h.id && x.student_id === s.id)?.status ?? null }));
     const exams = S.exams.filter(x => x.class_id === s.class_id).sort((a, b) => b.exam_date.localeCompare(a.exam_date) || b.id - a.id)
       .map(x => ({ id: x.id, title: x.title, subject: x.subject, full_mark: x.full_mark, exam_date: x.exam_date, score: S.exam_scores.find(e => e.exam_id === x.id && e.student_id === s.id)?.score ?? null }));
-    return { student: studentFull(s.id), class: clone(own('classes', s.class_id, tid)), events, homework, exams, thresholds: thresholdsOf(tid) };
+    const cls = own('classes', s.class_id, tid);
+    return { student: studentFull(s.id), class: clone(cls), events, homework, exams, thresholds: classThresholds(cls, tid) };
   });
   on('PATCH', '/students/:id', ({ tid, p, body }) => {
     const s = own('students', p.id, tid);
@@ -299,7 +302,7 @@ export function createDemoBackend(initial) {
     if (body.tag_id) { tag = own('behavior_tags', int(body.tag_id), tid); delta = tag.points; }
     if (!delta || Math.abs(delta) > 100) throw bad('分數必須是 -100 至 100 的整數（不可為 0）');
     const ids = [...new Set((body.student_ids || []).map(int))]; if (!ids.length) throw bad('請選擇學生');
-    const th = thresholdsOf(tid); const reason = str(body.reason, 60);
+    const th = classThresholds(c, tid); const reason = str(body.reason, 60);
     const label = tag ? `${tag.icon} ${tag.label}` : (reason || (delta > 0 ? `加 ${delta} 分` : `扣 ${-delta} 分`));
     const bid = txn(() => {
       const b = insert('score_batches', { teacher_id: tid, class_id: c.id, client_batch_id: clientBatch, label, undone_at: null });
@@ -390,13 +393,27 @@ export function createDemoBackend(initial) {
     st.thresholds = th;
     if (Array.isArray(body.timer_presets)) st.timer_presets = body.timer_presets.map(int).filter(n => n > 0 && n <= 7200).slice(0, 8);
     let upgraded = 0;
-    S.student_pets.filter(x => x.teacher_id === tid).forEach(pet => { const s = nextStage(pet.stage, pet.xp, th); if (s !== pet.stage) { upgraded++; pet.stage = s; pet.hatched_at ||= now(); } });
+    S.student_pets.filter(x => x.teacher_id === tid && !classOfStudent(x.student_record_id)?.thresholds)
+      .forEach(pet => { const s = nextStage(pet.stage, pet.xp, th); if (s !== pet.stage) { upgraded++; pet.stage = s; pet.hatched_at ||= now(); } });
     return { thresholds: th, upgraded, hunger_days: st.hunger_days, lock_days: st.lock_days };
   });
+  on('PUT', '/classes/:id/thresholds', ({ tid, p, body }) => {
+    const c = own('classes', p.id, tid);
+    let custom = null;
+    if (body.thresholds) { try { custom = normalizeThresholds(body.thresholds); } catch (e) { throw bad(e.message); } }
+    const th = custom || thresholdsOf(tid);
+    c.thresholds = custom ? JSON.stringify(custom) : null;
+    let upgraded = 0; const now_ = now();
+    S.student_pets.filter(pet => classOfStudent(pet.student_record_id)?.id === c.id).forEach(pet => {
+      const st = nextStage(pet.stage, pet.xp, th); if (st !== pet.stage) { upgraded++; pet.stage = st; pet.updated_at = now_; pet.hatched_at ||= now_; }
+    });
+    return { class: clone(c), thresholds: th, custom: !!custom, upgraded };
+  });
   on('GET', '/audit', ({ tid }) => {
-    const th = thresholdsOf(tid); const problems = [];
+    const problems = [];
     const pets = S.student_pets.filter(x => x.teacher_id === tid);
     for (const p of pets) {
+      const th = classThresholds(classOfStudent(p.student_record_id), tid);
       const led = S.pet_xp_ledger.filter(l => l.pet_id === p.id);
       const sum = led.filter(l => !l.reversed_at).reduce((a, l) => a + l.xp, 0);
       if (sum !== p.xp) problems.push(`寵物 ${p.id}：XP ${p.xp} 與入帳總和 ${sum} 不符`);
