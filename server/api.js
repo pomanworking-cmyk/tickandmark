@@ -1,7 +1,7 @@
 // Tick and Mark API（業務邏輯）。所有查詢都限制在登入老師的 teacher_id 內。
 import {
   SPECIES_KEYS, STAGES, DEFAULT_THRESHOLDS, normalizeThresholds, nextStage, stageForXp,
-  stageIndex, isXpEligible, balancedSpecies, lockInfo, DEFAULT_LOCK_DAYS,
+  stageIndex, isXpEligible, balancedSpecies, lockInfo, DEFAULT_LOCK_DAYS, accessoryByKey, ACCESSORIES, DEFAULT_THEMES,
 } from '../public/shared/pet-logic.js';
 
 export class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
@@ -25,7 +25,8 @@ export async function seedTeacher(db, teacherId) {
   await db.batch([
     ...DEFAULT_TAGS.map(([l, p, i], n) => ['INSERT INTO behavior_tags (teacher_id, label, points, icon, sort) VALUES (?,?,?,?,?)', teacherId, l, p, i, n]),
     ...DEFAULT_HW_TEMPLATES.map(([t, sj]) => ['INSERT OR IGNORE INTO homework_templates (teacher_id, title, subject) VALUES (?,?,?)', teacherId, t, sj]),
-    ...DEFAULT_REWARDS.map(([t, c, i], n) => ['INSERT INTO rewards (teacher_id, title, cost, icon, sort) VALUES (?,?,?,?,?)', teacherId, t, c, i, n])]);
+    ...DEFAULT_REWARDS.map(([t, c, i], n) => ['INSERT INTO rewards (teacher_id, title, cost, icon, sort) VALUES (?,?,?,?,?)', teacherId, t, c, i, n]),
+    ...DEFAULT_THEMES.map(([t, e], n) => ['INSERT INTO lesson_themes (teacher_id, title, effect, sort) VALUES (?,?,?,?)', teacherId, t, e, n])]);
 }
 const isDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''));
 
@@ -41,7 +42,7 @@ export function createApi(db) {
   const routes = [];
   const on = (method, pattern, fn) => {
     const keys = [];
-    const re = new RegExp('^' + pattern.replace(/:(\w+)/g, (_, k) => { keys.push(k); return '(\\d+)'; }) + '$');
+    const re = new RegExp('^' + pattern.replace(/:(\w+)/g, (_, k) => { keys.push(k); return k === 'key' ? '([a-z_]{1,20})' : '(\\d+)'; }) + '$');
     routes.push({ method, re, keys, fn });
   };
 
@@ -82,7 +83,8 @@ export function createApi(db) {
   };
   const inList = (ids) => ids.map(() => '?').join(',') || 'NULL';
   const STUDENT_SELECT = `SELECT s.*, (SELECT COALESCE(SUM(cost),0) FROM redemptions r WHERE r.student_id = s.id AND r.undone_at IS NULL) AS spent,
-    (SELECT COUNT(*) FROM pet_collection pc WHERE pc.student_record_id = s.id) AS collected FROM students s`;
+    (SELECT COUNT(*) FROM pet_collection pc WHERE pc.student_record_id = s.id) AS collected,
+    (SELECT json_group_array(item_key) FROM (SELECT item_key FROM student_accessories sa WHERE sa.student_id = s.id AND sa.equipped = 1 ORDER BY item_key)) AS gear FROM students s`;
   const COLLECTION_COLS = 'id, student_record_id, species_key, nickname, xp, assigned_at, hatched_at, completed_at';
   // 一次過讀取多位學生及其寵物（減少雲端資料庫來回次數）
   const studentsByIds = async (ids) => {
@@ -108,17 +110,17 @@ export function createApi(db) {
   // ---------- 啟動資料 ----------
   // 一次 HTTP 請求讀取全部啟動資料（雲端資料庫每次來回都需要時間）
   on('GET', '/bootstrap', async ({ tid }) => {
-    const [st, tags, classes, tpls, rewards] = await db.batch([
+    const [st, tags, classes, tpls, rewards, themes] = await db.batch([
       ['SELECT thresholds, hunger_days, lock_days, timer_presets FROM settings WHERE teacher_id = ?', tid],
       ['SELECT * FROM behavior_tags WHERE teacher_id = ? ORDER BY sort, id', tid],
-      [CLASSES_SQL, tid], [TEMPLATES_SQL, tid], [REWARDS_SQL, tid]]);
+      [CLASSES_SQL, tid], [TEMPLATES_SQL, tid], [REWARDS_SQL, tid], ['SELECT id, title, effect, sort FROM lesson_themes WHERE teacher_id = ? ORDER BY sort, id', tid]]);
     const row = st.rows[0];
     return {
       thresholds: row ? normalizeThresholds(JSON.parse(row.thresholds)) : { ...DEFAULT_THRESHOLDS },
       hunger_days: row?.hunger_days ?? 3,
       lock_days: row?.lock_days ?? DEFAULT_LOCK_DAYS,
       timer_presets: JSON.parse(row?.timer_presets || '[60,180,300,600]'),
-      tags: tags.rows, classes: classes.rows, homework_templates: tpls.rows, rewards: rewards.rows,
+      tags: tags.rows, classes: classes.rows, homework_templates: tpls.rows, rewards: rewards.rows, lesson_themes: themes.rows,
     };
   });
   const listTemplates = async (tid) => (await db.all(TEMPLATES_SQL, tid));
@@ -149,7 +151,16 @@ export function createApi(db) {
     return await own('classes', c.id, tid);
   });
   on('DELETE', '/classes/:id', async ({ tid, p }) => {
-    await own('classes', p.id, tid); (await db.run('DELETE FROM classes WHERE id = ?', p.id)); return { ok: true };
+    const c = await own('classes', p.id, tid);
+    // 逐個表明確刪除（雲端資料庫未必開啟外鍵連鎖刪除）
+    const sids = (await db.all('SELECT id FROM students WHERE class_id = ?', c.id)).map(r => r.id);
+    if (sids.length) await deleteStudents(sids);
+    await db.tx(() => db.batch([
+      ['DELETE FROM homework_submissions WHERE homework_id IN (SELECT id FROM homework WHERE class_id = ?)', c.id],
+      ['DELETE FROM exam_scores WHERE exam_id IN (SELECT id FROM exams WHERE class_id = ?)', c.id],
+      ...['homework', 'exams', 'attendance', 'class_goals', 'redemptions', 'score_batches', 'groups', 'class_day_themes'].map(t => [`DELETE FROM ${t} WHERE class_id = ?`, c.id]),
+      ['DELETE FROM classes WHERE id = ?', c.id]]));
+    return { ok: true };
   });
   on('GET', '/classes/:id/full', async ({ tid, p }) => {
     const [cr, rows, pets, groups] = await db.batch([
@@ -222,6 +233,74 @@ export function createApi(db) {
     return await listRewards(tid);
   });
   on('DELETE', '/rewards/:id', async ({ tid, p }) => { await own('rewards', p.id, tid); (await db.run('DELETE FROM rewards WHERE id = ?', p.id)); return await listRewards(tid); });
+  // ---------- 開始課堂：每日主題 ----------
+  const THEME_SQL = 'SELECT id, title, effect, sort FROM lesson_themes WHERE teacher_id = ? ORDER BY sort, id';
+  const effectOf = (e) => { const v = str(e, 20); if (v && v !== 'no_deduct') throw bad('未知規則'); return v; };
+  on('GET', '/themes', async ({ tid }) => db.all(THEME_SQL, tid));
+  on('POST', '/themes', async ({ tid, body }) => {
+    const title = str(body.title, 60); if (!title) throw bad('請輸入主題');
+    const n = (await db.get('SELECT COUNT(*) n, COALESCE(MAX(sort), -1) m FROM lesson_themes WHERE teacher_id = ?', tid));
+    if (n.n >= 50) throw bad('主題最多 50 個');
+    (await db.run('INSERT INTO lesson_themes (teacher_id, title, effect, sort) VALUES (?,?,?,?)', tid, title, effectOf(body.effect), n.m + 1));
+    return db.all(THEME_SQL, tid);
+  });
+  on('POST', '/themes/defaults', async ({ tid }) => {
+    const have = new Set((await db.all('SELECT title FROM lesson_themes WHERE teacher_id = ?', tid)).map(r => r.title));
+    const m = (await db.get('SELECT COALESCE(MAX(sort), -1) m FROM lesson_themes WHERE teacher_id = ?', tid)).m;
+    await db.batch(DEFAULT_THEMES.filter(([t]) => !have.has(t)).map(([t, e], i) => ['INSERT INTO lesson_themes (teacher_id, title, effect, sort) VALUES (?,?,?,?)', tid, t, e, m + 1 + i]));
+    return db.all(THEME_SQL, tid);
+  });
+  on('DELETE', '/themes/:id', async ({ tid, p }) => { await own('lesson_themes', p.id, tid); (await db.run('DELETE FROM lesson_themes WHERE id = ?', p.id)); return db.all(THEME_SQL, tid); });
+  on('GET', '/classes/:id/day', async ({ tid, p, q: query }) => {
+    const c = await own('classes', p.id, tid); if (!isDate(query.date)) throw bad('日期格式錯誤');
+    return { theme: (await db.get('SELECT date, title, effect FROM class_day_themes WHERE class_id = ? AND date = ?', c.id, query.date)) || null };
+  });
+  on('PUT', '/classes/:id/day', async ({ tid, p, body }) => {
+    const c = await own('classes', p.id, tid); if (!isDate(body.date)) throw bad('日期格式錯誤');
+    if (body.title === null) { (await db.run('DELETE FROM class_day_themes WHERE class_id = ? AND date = ?', c.id, body.date)); return { theme: null }; }
+    const title = str(body.title, 60); if (!title) throw bad('請輸入主題');
+    (await db.run(`INSERT INTO class_day_themes (class_id, teacher_id, date, title, effect) VALUES (?,?,?,?,?)
+      ON CONFLICT(class_id, date) DO UPDATE SET title = excluded.title, effect = excluded.effect`, c.id, tid, body.date, title, effectOf(body.effect)));
+    return { theme: (await db.get('SELECT date, title, effect FROM class_day_themes WHERE class_id = ? AND date = ?', c.id, body.date)) };
+  });
+
+  // ---------- 寵物飾物店（用可用分數購買；屬於學生，換新蛋都保留） ----------
+  const accessoriesOf = (sid) => db.all('SELECT item_key, equipped, redemption_id, created_at FROM student_accessories WHERE student_id = ? ORDER BY id', sid);
+  on('GET', '/students/:id/accessories', async ({ tid, p }) => { const s = await own('students', p.id, tid); return { owned: await accessoriesOf(s.id), student: await studentFull(s.id) }; });
+  on('POST', '/students/:id/accessories', async ({ tid, p, body }) => {
+    const s = await own('students', p.id, tid); const item = accessoryByKey[str(body.item_key, 20)];
+    if (!item) throw bad('未知飾物');
+    return db.tx(async () => {
+      const cur = await studentFull(s.id);
+      if ((await db.get('SELECT 1 x FROM student_accessories WHERE student_id = ? AND item_key = ?', s.id, item.key))) throw bad(`已經買咗「${item.name}」`);
+      if (cur.score - cur.spent < item.cost) throw bad(`${s.name} 可用分數只有 ${cur.score - cur.spent} 分，不夠買「${item.name}」（${item.cost} 分）`);
+      const sameSlot = ACCESSORIES.filter(a => a.slot === item.slot).map(a => a.key);
+      const [ins] = await db.batch([
+        ['INSERT INTO redemptions (teacher_id, class_id, student_id, reward_id, title, cost) VALUES (?,?,?,NULL,?,?) RETURNING id', tid, s.class_id, s.id, `飾物：${item.name}`, item.cost],
+        [`UPDATE student_accessories SET equipped = 0 WHERE student_id = ? AND item_key IN (${inList(sameSlot)})`, s.id, ...sameSlot]]);
+      (await db.run('INSERT INTO student_accessories (teacher_id, student_id, item_key, redemption_id, equipped) VALUES (?,?,?,?,1)', tid, s.id, item.key, ins.rows[0].id));
+      return { owned: await accessoriesOf(s.id), student: await studentFull(s.id) };
+    });
+  });
+  on('PATCH', '/students/:id/accessories/:key', async ({ tid, p, body }) => {
+    const s = await own('students', p.id, tid); const item = accessoryByKey[p.key];
+    if (!item || !(await db.get('SELECT 1 x FROM student_accessories WHERE student_id = ? AND item_key = ?', s.id, item.key))) throw notFound();
+    const sameSlot = ACCESSORIES.filter(a => a.slot === item.slot).map(a => a.key);
+    await db.tx(() => db.batch([
+      ...(body.equipped ? [[`UPDATE student_accessories SET equipped = 0 WHERE student_id = ? AND item_key IN (${inList(sameSlot)})`, s.id, ...sameSlot]] : []),
+      ['UPDATE student_accessories SET equipped = ? WHERE student_id = ? AND item_key = ?', body.equipped ? 1 : 0, s.id, item.key]]));
+    return { owned: await accessoriesOf(s.id), student: await studentFull(s.id) };
+  });
+  // 退回飾物（老師撳錯）：分數退返
+  on('DELETE', '/students/:id/accessories/:key', async ({ tid, p }) => {
+    const s = await own('students', p.id, tid);
+    const a = await db.get('SELECT * FROM student_accessories WHERE student_id = ? AND item_key = ?', s.id, p.key); if (!a) throw notFound();
+    await db.tx(() => db.batch([
+      ['UPDATE redemptions SET undone_at = ? WHERE id = ? AND undone_at IS NULL', now(), a.redemption_id],
+      ['DELETE FROM student_accessories WHERE id = ?', a.id]]));
+    return { owned: await accessoriesOf(s.id), student: await studentFull(s.id) };
+  });
+
   on('POST', '/redemptions', async ({ tid, body }) => {
     const s = await own('students', int(body.student_id), tid); const r = await own('rewards', int(body.reward_id), tid);
     return db.tx(async () => {
@@ -343,7 +422,7 @@ export function createApi(db) {
     return db.tx(() => db.batch([
       [`DELETE FROM pet_xp_ledger WHERE pet_id IN (SELECT id FROM student_pets WHERE student_record_id IN (${L}))`, ...ids],
       [`DELETE FROM pet_xp_ledger WHERE score_event_id IN (SELECT id FROM score_events WHERE student_id IN (${L}))`, ...ids],
-      ...['pet_collection:student_record_id', 'student_pets:student_record_id', 'score_events:student_id', 'homework_submissions:student_id', 'exam_scores:student_id', 'attendance:student_id', 'redemptions:student_id', 'students:id']
+      ...['student_accessories:student_id', 'pet_collection:student_record_id', 'student_pets:student_record_id', 'score_events:student_id', 'homework_submissions:student_id', 'exam_scores:student_id', 'attendance:student_id', 'redemptions:student_id', 'students:id']
         .map(x => { const [t, c] = x.split(':'); return [`DELETE FROM ${t} WHERE ${c} IN (${L})`, ...ids]; })]));
   };
   on('DELETE', '/students/:id', async ({ tid, p }) => {
@@ -774,7 +853,7 @@ export function createApi(db) {
     for (const r of routes) {
       if (r.method !== method) continue;
       const m = path.match(r.re); if (!m) continue;
-      const p = Object.fromEntries(r.keys.map((k, i) => [k, Number(m[i + 1])]));
+      const p = Object.fromEntries(r.keys.map((k, i) => [k, k === 'key' ? m[i + 1] : Number(m[i + 1])]));
       return await r.fn({ tid, p, body: body || {}, q: query });
     }
     throw new HttpError(404, '找不到此功能');

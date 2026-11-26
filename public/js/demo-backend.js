@@ -2,7 +2,7 @@
 // 只用於預覽連結（沒有真伺服器時）。寵物規則同樣取自 shared/pet-logic.js。
 import {
   SPECIES_KEYS, STAGES, DEFAULT_THRESHOLDS, normalizeThresholds, nextStage, stageForXp,
-  stageIndex, isXpEligible, balancedSpecies, lockInfo, DEFAULT_LOCK_DAYS,
+  stageIndex, isXpEligible, balancedSpecies, lockInfo, DEFAULT_LOCK_DAYS, accessoryByKey, ACCESSORIES, DEFAULT_THEMES,
 } from '../shared/pet-logic.js';
 
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
@@ -18,6 +18,7 @@ export function createDemoBackend(initial) {
     seq: {}, teachers: [], settings: [], classes: [], groups: [], students: [], behavior_tags: [],
     score_batches: [], score_events: [], student_pets: [], pet_xp_ledger: [], pet_collection: [], homework: [],
     homework_submissions: [], exams: [], exam_scores: [], homework_templates: [], attendance: [], class_goals: [], rewards: [], redemptions: [],
+    lesson_themes: [], class_day_themes: [], student_accessories: [],
   };
   const nextId = (t) => S[t].reduce((m, r) => Math.max(m, r.id), 0) + 1; // 與 SQLite rowid 相同：現有最大值 + 1
   const insert = (t, row) => { const r = { id: nextId(t), created_at: now(), ...row }; S[t].push(r); return r; };
@@ -45,7 +46,7 @@ export function createDemoBackend(initial) {
   const spentOf = (sid) => S.redemptions.filter(r => r.student_id === sid && !r.undone_at).reduce((a, r) => a + r.cost, 0);
   const collectionOf = (sid) => clone(S.pet_collection.filter(c => c.student_record_id === sid).sort((a, b) => a.completed_at.localeCompare(b.completed_at) || a.id - b.id)
     .map(({ id, student_record_id, species_key, nickname, xp, assigned_at, hatched_at, completed_at }) => ({ id, student_record_id, species_key, nickname, xp, assigned_at, hatched_at, completed_at })));
-  const studentFull = (sid) => { const s = S.students.find(s => s.id === sid); return { ...clone(s), spent: spentOf(sid), collected: S.pet_collection.filter(c => c.student_record_id === sid).length, pet: petOf(sid) }; };
+  const studentFull = (sid) => { const s = S.students.find(s => s.id === sid); return { ...clone(s), spent: spentOf(sid), collected: S.pet_collection.filter(c => c.student_record_id === sid).length, gear: gearOf(sid), pet: petOf(sid) }; };
   const sortStudents = (a, b) => (a.number == null) - (b.number == null) || (a.number ?? 0) - (b.number ?? 0) || a.id - b.id;
   const studentsOf = (cid) => S.students.filter(s => s.class_id === cid).sort(sortStudents).map(s => studentFull(s.id));
   const tagOf = (id) => S.behavior_tags.find(t => t.id === id);
@@ -58,7 +59,13 @@ export function createDemoBackend(initial) {
       .forEach(([label, points, icon], sort) => insert('behavior_tags', { teacher_id: tid, label, points, icon, sort }));
     [['中文作文', '中文'], ['英文默書', '英文'], ['數學工作紙', '數學'], ['常識工作紙', '常識']].forEach(([title, subject]) => addTemplate(tid, title, subject));
     [['貼紙一張', 5, '⭐'], ['做小老師', 10, '🧑‍🏫'], ['自己揀位一日', 15, '🪑'], ['免抄一次', 20, '📝']].forEach(([title, cost, icon], sort) => insert('rewards', { teacher_id: tid, title, cost, icon, sort }));
+    DEFAULT_THEMES.forEach(([title, effect], sort) => insert('lesson_themes', { teacher_id: tid, title, effect, sort }));
   }
+  const listThemes = (tid) => S.lesson_themes.filter(t => t.teacher_id === tid).sort((a, b) => a.sort - b.sort || a.id - b.id).map(({ id, title, effect, sort }) => ({ id, title, effect, sort }));
+  const effectOf = (e) => { const v = str(e, 20); if (v && v !== 'no_deduct') throw bad('未知規則'); return v; };
+  const gearOf = (sid) => JSON.stringify(S.student_accessories.filter(a => a.student_id === sid && a.equipped).map(a => a.item_key).sort());
+  const accessoriesOf = (sid) => S.student_accessories.filter(a => a.student_id === sid).sort((a, b) => a.id - b.id)
+    .map(({ item_key, equipped, redemption_id, created_at }) => ({ item_key, equipped, redemption_id, created_at }));
   const isDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''));
   const listRewards = (tid) => S.rewards.filter(r => r.teacher_id === tid).sort((a, b) => a.sort - b.sort || a.id - b.id).map(({ id, title, cost, icon, sort }) => ({ id, title, cost, icon, sort }));
   const goalOf = (cid) => {
@@ -96,13 +103,13 @@ export function createDemoBackend(initial) {
 
   const routes = [];
   const on = (method, pattern, fn) => {
-    const keys = []; const re = new RegExp('^' + pattern.replace(/:(\w+)/g, (_, k) => { keys.push(k); return '(\\d+)'; }) + '$');
+    const keys = []; const re = new RegExp('^' + pattern.replace(/:(\w+)/g, (_, k) => { keys.push(k); return k === 'key' ? '([a-z_]{1,20})' : '(\\d+)'; }) + '$');
     routes.push({ method, re, keys, fn });
   };
 
   on('GET', '/bootstrap', ({ tid }) => ({ thresholds: thresholdsOf(tid), hunger_days: settingsOf(tid).hunger_days, lock_days: settingsOf(tid).lock_days ?? DEFAULT_LOCK_DAYS, timer_presets: settingsOf(tid).timer_presets,
     tags: clone(S.behavior_tags.filter(t => t.teacher_id === tid).sort((a, b) => a.sort - b.sort || a.id - b.id)), classes: listClasses(tid),
-    homework_templates: listTemplates(tid), rewards: listRewards(tid) }));
+    homework_templates: listTemplates(tid), rewards: listRewards(tid), lesson_themes: listThemes(tid) }));
   on('GET', '/classes/:id/attendance', ({ tid, p, q }) => {
     const c = own('classes', p.id, tid); if (!isDate(q.date)) throw bad('日期格式不正確');
     return { date: q.date, absent: S.attendance.filter(a => a.class_id === c.id && a.date === q.date).map(a => a.student_id).sort((a, b) => a - b) };
@@ -141,6 +148,52 @@ export function createDemoBackend(initial) {
     Object.assign(r, { title: str(body.title ?? r.title, 20) || r.title, cost, icon: str(body.icon ?? r.icon, 4) || r.icon }); return listRewards(tid);
   });
   on('DELETE', '/rewards/:id', ({ tid, p }) => { own('rewards', p.id, tid); S.rewards = S.rewards.filter(r => r.id !== p.id); S.redemptions.forEach(x => { if (x.reward_id === p.id) x.reward_id = null; }); return listRewards(tid); });
+  on('GET', '/themes', ({ tid }) => listThemes(tid));
+  on('POST', '/themes', ({ tid, body }) => {
+    const title = str(body.title, 60); if (!title) throw bad('請輸入主題');
+    const mine = listThemes(tid); if (mine.length >= 50) throw bad('主題最多 50 個');
+    insert('lesson_themes', { teacher_id: tid, title, effect: effectOf(body.effect), sort: Math.max(-1, ...mine.map(t => t.sort)) + 1 }); return listThemes(tid);
+  });
+  on('POST', '/themes/defaults', ({ tid }) => {
+    const mine = listThemes(tid); const have = new Set(mine.map(t => t.title)); const m = Math.max(-1, ...mine.map(t => t.sort));
+    DEFAULT_THEMES.filter(([t]) => !have.has(t)).forEach(([title, effect], i) => insert('lesson_themes', { teacher_id: tid, title, effect, sort: m + 1 + i }));
+    return listThemes(tid);
+  });
+  on('DELETE', '/themes/:id', ({ tid, p }) => { own('lesson_themes', p.id, tid); S.lesson_themes = S.lesson_themes.filter(t => t.id !== p.id); return listThemes(tid); });
+  const dayOf = (cid, date) => { const d = S.class_day_themes.find(x => x.class_id === cid && x.date === date); return d ? { date: d.date, title: d.title, effect: d.effect } : null; };
+  on('GET', '/classes/:id/day', ({ tid, p, q }) => { const c = own('classes', p.id, tid); if (!isDate(q.date)) throw bad('日期格式錯誤'); return { theme: dayOf(c.id, q.date) }; });
+  on('PUT', '/classes/:id/day', ({ tid, p, body }) => {
+    const c = own('classes', p.id, tid); if (!isDate(body.date)) throw bad('日期格式錯誤');
+    S.class_day_themes = S.class_day_themes.filter(x => !(x.class_id === c.id && x.date === body.date));
+    if (body.title === null) return { theme: null };
+    const title = str(body.title, 60); if (!title) throw bad('請輸入主題');
+    S.class_day_themes.push({ class_id: c.id, teacher_id: tid, date: body.date, title, effect: effectOf(body.effect), created_at: now() });
+    return { theme: dayOf(c.id, body.date) };
+  });
+  on('GET', '/students/:id/accessories', ({ tid, p }) => { const s = own('students', p.id, tid); return { owned: accessoriesOf(s.id), student: studentFull(s.id) }; });
+  on('POST', '/students/:id/accessories', ({ tid, p, body }) => {
+    const s = own('students', p.id, tid); const item = accessoryByKey[str(body.item_key, 20)]; if (!item) throw bad('未知飾物');
+    const cur = studentFull(s.id);
+    if (S.student_accessories.some(a => a.student_id === s.id && a.item_key === item.key)) throw bad(`已經買咗「${item.name}」`);
+    if (cur.score - cur.spent < item.cost) throw bad(`${s.name} 可用分數只有 ${cur.score - cur.spent} 分，不夠買「${item.name}」（${item.cost} 分）`);
+    const x = insert('redemptions', { teacher_id: tid, class_id: s.class_id, student_id: s.id, reward_id: null, title: `飾物：${item.name}`, cost: item.cost, undone_at: null });
+    S.student_accessories.forEach(a => { if (a.student_id === s.id && accessoryByKey[a.item_key]?.slot === item.slot) a.equipped = 0; });
+    insert('student_accessories', { teacher_id: tid, student_id: s.id, item_key: item.key, redemption_id: x.id, equipped: 1 });
+    return { owned: accessoriesOf(s.id), student: studentFull(s.id) };
+  });
+  on('PATCH', '/students/:id/accessories/:key', ({ tid, p, body }) => {
+    const s = own('students', p.id, tid); const item = accessoryByKey[p.key];
+    const a = item && S.student_accessories.find(x => x.student_id === s.id && x.item_key === item.key); if (!a) throw notFound();
+    if (body.equipped) S.student_accessories.forEach(x => { if (x.student_id === s.id && accessoryByKey[x.item_key]?.slot === item.slot) x.equipped = 0; });
+    a.equipped = body.equipped ? 1 : 0;
+    return { owned: accessoriesOf(s.id), student: studentFull(s.id) };
+  });
+  on('DELETE', '/students/:id/accessories/:key', ({ tid, p }) => {
+    const s = own('students', p.id, tid); const a = S.student_accessories.find(x => x.student_id === s.id && x.item_key === p.key); if (!a) throw notFound();
+    const r = S.redemptions.find(x => x.id === a.redemption_id); if (r && !r.undone_at) r.undone_at = now();
+    S.student_accessories = S.student_accessories.filter(x => x !== a);
+    return { owned: accessoriesOf(s.id), student: studentFull(s.id) };
+  });
   on('POST', '/redemptions', ({ tid, body }) => {
     const s = own('students', int(body.student_id), tid); const r = own('rewards', int(body.reward_id), tid);
     const cur = studentFull(s.id);
@@ -186,6 +239,8 @@ export function createDemoBackend(initial) {
     S.classes = S.classes.filter(c => c.id !== p.id); S.students = S.students.filter(s => s.class_id !== p.id);
     S.groups = S.groups.filter(g => g.class_id !== p.id); S.student_pets = S.student_pets.filter(x => !sids.includes(x.student_record_id));
     S.score_events = S.score_events.filter(e => e.class_id !== p.id); S.score_batches = S.score_batches.filter(b => b.class_id !== p.id);
+    S.class_day_themes = S.class_day_themes.filter(x => x.class_id !== p.id); S.redemptions = S.redemptions.filter(x => x.class_id !== p.id);
+    S.student_accessories = S.student_accessories.filter(a => !sids.includes(a.student_id)); S.pet_collection = S.pet_collection.filter(c => !sids.includes(c.student_record_id));
     return { ok: true };
   });
   on('GET', '/classes/:id/full', ({ tid, p }) => { const c = own('classes', p.id, tid); return { class: clone(c), students: studentsOf(c.id), groups: clone(S.groups.filter(g => g.class_id === c.id)) }; });
@@ -255,6 +310,7 @@ export function createDemoBackend(initial) {
   });
   const removeStudent = (id) => {
     S.students = S.students.filter(s => s.id !== id); S.pet_collection = S.pet_collection.filter(c => c.student_record_id !== id);
+    S.student_accessories = S.student_accessories.filter(a => a.student_id !== id);
     const pet = S.student_pets.find(x => x.student_record_id === id);
     S.student_pets = S.student_pets.filter(x => x !== pet); S.score_events = S.score_events.filter(e => e.student_id !== id);
     S.redemptions = S.redemptions.filter(r => r.student_id !== id); S.attendance = S.attendance.filter(a => a.student_id !== id);
@@ -547,7 +603,7 @@ export function createDemoBackend(initial) {
   function handle(method, path, { tid, body = {}, query = {} } = {}) {
     for (const r of routes) {
       if (r.method !== method) continue; const m = path.match(r.re); if (!m) continue;
-      const p = Object.fromEntries(r.keys.map((k, i) => [k, Number(m[i + 1])]));
+      const p = Object.fromEntries(r.keys.map((k, i) => [k, k === 'key' ? m[i + 1] : Number(m[i + 1])]));
       return clone(r.fn({ tid, p, body: body || {}, q: query }));
     }
     throw new HttpError(404, '找不到此功能');

@@ -1,7 +1,7 @@
 // Tick and Mark 前端（繁體中文單頁應用）
 import { GET, POST, PUT, PATCH, DEL, uid, IS_DEMO } from './api.js';
 import { esc, $, $$, avatar, dexImage, xpBar, petStatus, toast, openDialog, confirmBox, celebrate, ICON, fmtDate, fmtTime, signed } from './ui.js';
-import { SPECIES, STAGES, STAGE_LABELS, speciesByKey, petLabel, progressInfo, hungerLevel, hungerMessage, schoolDaysBetween, normalizeThresholds } from '../shared/pet-logic.js';
+import { SPECIES, STAGES, STAGE_LABELS, speciesByKey, petLabel, progressInfo, hungerLevel, hungerMessage, schoolDaysBetween, normalizeThresholds, ACCESSORIES, accessoryByKey } from '../shared/pet-logic.js';
 import { readFileToStudents, textToStudents, ocrImage } from './importer.js';
 
 const app = document.getElementById('app');
@@ -97,8 +97,9 @@ async function routeInner(my) {
 }
 async function loadRoomExtras() {
   const date = todayStr();
-  const [att, goal, miss] = await Promise.all([GET(`/classes/${state.classId}/attendance?date=${date}`), GET(`/classes/${state.classId}/goal`), GET(`/classes/${state.classId}/missing-homework`)]);
-  state.absent = new Set(att.absent); state.attDate = date; state.goal = goal; setMissing(miss);
+  const [att, goal, miss, day] = await Promise.all([GET(`/classes/${state.classId}/attendance?date=${date}`), GET(`/classes/${state.classId}/goal`), GET(`/classes/${state.classId}/missing-homework`),
+    GET(`/classes/${state.classId}/day?date=${date}`)]);
+  state.absent = new Set(att.absent); state.attDate = date; state.goal = goal; setMissing(miss); state.dayTheme = day.theme;
 }
 function setMissing(rows) {
   state.missing = new Map();
@@ -215,6 +216,11 @@ function renderHome() {
 
 // ---------- 加減分 ----------
 async function givePoints(ids, { delta, tag, reason, quick = false }) {
+  // 今日主題「老師唔扣分」：扣分暫停
+  if ((tag ? tag.points : delta) < 0 && state.dayTheme?.effect === 'no_deduct' && state.dayTheme.date === todayStr()) {
+    toast(`今日主題：${state.dayTheme.title}——今日唔扣分 😇`, { error: true }); return null;
+  }
+  state.hopIds = new Set(ids); state.hopUntil = Date.now() + 1500; // 加分嘅寵物跳一跳
   const body = { class_id: state.classId, student_ids: [...ids], client_batch_id: uid(), ...(tag ? { tag_id: tag.id } : { delta, reason }) };
   const hungryBefore = new Set([...ids].filter(id => hungerOf(students().find(x => x.id === id)) > 0));
   let res;
@@ -265,7 +271,7 @@ function pointSheet(ids) {
     <form class="row" data-custom><label class="field"><span>自訂原因</span><input class="input" id="pt-reason" name="reason" maxlength="60" placeholder="例如：朗讀出色"></label>
       <label class="field" style="flex:0 0 100px"><span>分數</span><input class="input num" id="pt-delta" name="delta" type="number" min="-100" max="100" value="1" required></label>
       <button class="btn blue">給分</button></form>
-    ${list.length === 1 ? `<div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn ghost sm" data-redeem>🎁 兌換獎勵（可用 ${list[0].score - (list[0].spent || 0)} 分）</button><a class="btn ghost sm" href="#/s/${list[0].id}">查看學生資料 →</a></div>` : ''}`);
+    ${list.length === 1 ? `<div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn ghost sm" data-redeem>🎁 兌換獎勵（可用 ${list[0].score - (list[0].spent || 0)} 分）</button>${list[0].pet ? '<button class="btn ghost sm" data-shop>🛍️ 飾物店</button>' : ''}<a class="btn ghost sm" href="#/s/${list[0].id}">查看學生資料 →</a></div>` : ''}`);
   const done = async (opts) => {
     $$('button', d).forEach(b => { b.disabled = true; });
     try { await givePoints(ids, opts); d.close(); room.sel.clear(); room.multi = false; if ($('#room-grid')) renderRoom(); }
@@ -275,6 +281,7 @@ function pointSheet(ids) {
     const t = e.target.closest('[data-tag]'); if (t) return done({ tag: tags.find(x => x.id === Number(t.dataset.tag)) });
     const q = e.target.closest('[data-d]'); if (q) return done({ delta: Number(q.dataset.d) });
     if (e.target.closest('[data-redeem]')) { d.close(); openRewards(ids[0]); }
+    if (e.target.closest('[data-shop]')) { d.close(); openShop(list[0]); }
     if (e.target.closest('[data-unlock]')) { d.close(); unlockFlow(list[0]); }
     if (e.target.closest('[data-nextegg]')) { d.close(); nextEggFlow(list[0]); }
   });
@@ -342,6 +349,7 @@ function drawQuickBar() {
   const bar = $('#quick-bar'); if (!bar) return;
   bar.className = 'quick-bar' + (room.mode !== 'points' ? ' editing' : '');
   bar.innerHTML = { points: quickBarHTML, seats: seatEditBarHTML, attend: attendBarHTML, hw: hwBarHTML }[room.mode]();
+  $$('.qchip[data-q^="d:-"]', bar).forEach(c => c.classList.toggle('disabled', noDeductToday()));
   const sel = $('#hw-pick', bar);
   if (sel) sel.onchange = () => { if (sel.value === 'new') { sel.value = room.hwId || ''; newHomeworkQuick(); } else selectHomework(Number(sel.value)).catch(fail); };
 }
@@ -364,6 +372,9 @@ function renderRoom() {
       <button class="btn" data-act="all">全班加分</button>
     </div>
     <div class="tool-row">
+      <button class="tool start-lesson" data-act="gacha">🎰 開始課堂</button>
+      <button class="tool" data-act="dailyq">❓ 每日一題</button>
+      <button class="tool" data-act="parade">🌈 寵物巡遊</button>
       <button class="tool" data-act="pickone">🎲 抽人</button>
       <button class="tool" data-act="timer">⏱ 計時</button>
       <button class="tool" data-act="noise">🔊 噪音計</button>
@@ -375,6 +386,7 @@ function renderRoom() {
       <button class="tool missing-pill" data-act="missinghw" id="missing-pill" hidden></button>
       <button class="goal-pill" data-act="goal" id="goal-pill"></button>
     </div>
+    <button class="day-theme" id="day-theme" data-act="gacha" hidden></button>
     <div class="mode-tabs" role="tablist" aria-label="模式">${[['points', '⭐ 加分'], ['attend', '📋 點名'], ['hw', '📥 收功課'], ['seats', '🪑 編排座位']].map(([k, l]) => `<button class="mode-tab" role="tab" data-act="mode" data-m="${k}" aria-pressed="${room.mode === k}">${l}</button>`).join('')}</div>
     <div id="quick-bar" class="quick-bar"></div>
     ${state.cls.groups.length ? '<div class="group-row" id="group-row"></div>' : ''}
@@ -408,6 +420,9 @@ function renderRoom() {
   ACT.regroup = () => openRegroup();
   ACT.rewards = () => openRewards();
   ACT.goal = () => openGoal();
+  ACT.gacha = () => openGacha();
+  ACT.dailyq = () => dailyQuestion();
+  ACT.parade = () => openParade();
   ACT.hungry = () => openHungry();
   ACT.locked = () => openLocked();
   ACT.missinghw = () => openMissing();
@@ -457,7 +472,7 @@ function renderRoom() {
     students().slice().sort(byNumber).forEach((s, i) => pos.set(s.id, [Math.floor(i / cols), i % cols]));
     saveSeats(pos, cols);
   };
-  drawQuickBar(); drawGroupRow(); drawGoalPill(); drawHungryPill(); drawMissingPill(); drawRoomGrid();
+  drawQuickBar(); drawGroupRow(); drawGoalPill(); drawHungryPill(); drawMissingPill(); drawDayTheme(); drawRoomGrid();
 }
 function drawMissingPill() {
   const el = $('#missing-pill'); if (!el) return;
@@ -636,7 +651,7 @@ function stuCard(s, rc) {
   const g = groupOf(s);
   const absent = state.absent.has(s.id);
   const hl = hungerOf(s);
-  const cls = ['stu', room.sel.has(s.id) ? 'sel' : '', room.edit && room.pick === s.id ? 'picked' : '', absent ? 'absent' : '', hl ? `hungry h${hl}` : ''].filter(Boolean).join(' ');
+  const cls = ['stu', state.hopUntil > Date.now() && state.hopIds?.has(s.id) ? 'hop' : '', room.sel.has(s.id) ? 'sel' : '', room.edit && room.pick === s.id ? 'picked' : '', absent ? 'absent' : '', hl ? `hungry h${hl}` : ''].filter(Boolean).join(' ');
   const hw = room.mode === 'hw' ? room.hwMap.get(s.id) : null;
   const badge = absent ? '<span class="ribbon absent">缺席</span>' : hw ? `<span class="ribbon hw-${hw}">${HW_LABEL[hw]}</span>` : '';
   return `<div class="${cls}" role="button" tabindex="0" data-act="stu" data-id="${s.id}"${rc ? ` data-r="${rc[0]}" data-c="${rc[1]}"` : ''} ${g ? `style="--gc:${esc(g.color)}"` : ''} aria-label="${esc(s.name)}，${s.score} 分">
@@ -767,6 +782,199 @@ function newHomeworkQuick() {
   d.querySelector('[data-f]').onsubmit = async (e) => {
     e.preventDefault();
     try { const h = await POST(`/classes/${state.classId}/homework`, Object.fromEntries(new FormData(e.target))); d.close(); await loadHwList(); await selectHomework(h.id); toast(`已新增「${h.title}」`); }
+    catch (err) { fail(err); }
+  };
+}
+
+// ---------- 開始課堂：扭蛋機抽今日主題 ----------
+function drawDayTheme() {
+  const el = $('#day-theme'); if (!el) return;
+  const t = state.dayTheme && state.dayTheme.date === todayStr() ? state.dayTheme : null;
+  el.hidden = !t;
+  if (t) el.innerHTML = `<span class="dt-cap">🎐 今日主題</span><b>${esc(t.title)}</b>${t.effect === 'no_deduct' ? '<span class="chip good small">今日唔扣分</span>' : ''}`;
+}
+const noDeductToday = () => state.dayTheme?.effect === 'no_deduct' && state.dayTheme.date === todayStr();
+function sfx(kind) { // 輕量音效（唔使下載檔案）
+  try {
+    const ctx = sfx.ctx ||= new (window.AudioContext || window.webkitAudioContext)();
+    const tone = (f, t0, dur, type = 'sine', vol = 0.18) => { const o = ctx.createOscillator(); const g = ctx.createGain(); o.type = type; o.frequency.setValueAtTime(f, ctx.currentTime + t0);
+      g.gain.setValueAtTime(vol, ctx.currentTime + t0); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t0 + dur); o.connect(g); g.connect(ctx.destination); o.start(ctx.currentTime + t0); o.stop(ctx.currentTime + t0 + dur); };
+    if (kind === 'crank') for (let i = 0; i < 10; i++) tone(180 + (i % 2) * 40, i * 0.11, 0.06, 'square', 0.05);
+    if (kind === 'drop') { tone(520, 0, 0.12, 'triangle'); tone(330, 0.12, 0.18, 'triangle'); }
+    if (kind === 'pop') { tone(660, 0, 0.1); tone(880, 0.08, 0.1); tone(1320, 0.16, 0.25); }
+    if (kind === 'yay') [523, 659, 784, 1047].forEach((f, i) => tone(f, i * 0.09, 0.3, 'triangle', 0.14));
+  } catch { /* 無聲 */ }
+}
+const CAP_COLORS = [['#ff9bb3', '#fff'], ['#8cc4f5', '#fff'], ['#8ad9b4', '#fff'], ['#ffd166', '#fff'], ['#c9a7f5', '#fff'], ['#ffb38a', '#fff']];
+function capsuleSVG([a, b], size = 46) {
+  return `<svg class="cap-svg" viewBox="0 0 40 40" width="${size}" height="${size}" aria-hidden="true">
+    <path d="M2 20a18 18 0 0 1 36 0z" fill="${a}"/><path d="M2 20a18 18 0 0 0 36 0z" fill="${b}"/><circle cx="20" cy="20" r="18" fill="none" stroke="rgba(90,60,90,.25)" stroke-width="1.5"/>
+    <ellipse cx="13" cy="11" rx="5" ry="3" fill="rgba(255,255,255,.7)"/></svg>`;
+}
+function openGacha() {
+  let themes = state.boot.lesson_themes || [];
+  const today = state.dayTheme && state.dayTheme.date === todayStr() ? state.dayTheme : null;
+  // 扭蛋堆喺玻璃球底部（好似真嘅扭蛋機）
+  const PILE = [[30, 82], [43, 85], [56, 85], [69, 81], [22, 72], [35, 73], [48, 74], [61, 73], [74, 71], [84, 62], [28, 62], [41, 62], [54, 63], [67, 61], [47, 52], [60, 51]];
+  const caps = PILE.map(([x, y], i) => { const c = CAP_COLORS[i % CAP_COLORS.length]; return `<span class="cap" style="left:${x}%;top:${y}%;--r:${(i * 47) % 360}deg;--d:${(i % 5) * 0.07}s">${capsuleSVG(c, 40)}</span>`; }).join('');
+  const d = openDialog(`<div class="sheet-head"><h2>🎰 開始課堂</h2><button class="btn ghost" data-close>✕</button></div>
+    <div class="gacha-stage">
+      <div class="gacha-hint" id="g-hint">${today ? `今日已經抽咗：<b>${esc(today.title)}</b>・想再抽可以再扭` : '撳個掣扭一扭，抽今日嘅課堂主題！'}</div>
+      <div class="gacha">
+        <div class="g-dome"><div class="g-glass">${caps}</div><div class="g-shine"></div></div>
+        <div class="g-body">
+          <div class="g-label">今日主題扭蛋機</div>
+          <button class="g-knob" id="g-knob" aria-label="扭扭蛋機"><span class="g-handle"></span></button>
+          <div class="g-chute"><div class="g-out" id="g-out"></div></div>
+        </div>
+        <div class="g-feet"></div>
+      </div>
+      <div class="g-result" id="g-result" hidden></div>
+      <div class="row" style="justify-content:center" id="g-actions"><button class="btn sm" id="g-edit">✏️ 編輯主題（${themes.length}）</button></div>
+      <div class="g-editor" id="g-editor" hidden></div>
+    </div>`, { full: true });
+  let busy = false; let pick = null; let turns = 0;
+  const knob = $('#g-knob', d);
+  const spin = async () => {
+    if (busy) return;
+    if (!themes.length) { toast('未有主題，請先撳「編輯主題」加入', { error: true }); return showEditor(); }
+    busy = true; turns += 1; $('#g-result', d).hidden = true; $('#g-out', d).innerHTML = '';
+    let pool = themes.filter(t => !pick || t.id !== pick.id || themes.length === 1);
+    pick = pool[Math.floor(Math.random() * pool.length)];
+    knob.style.setProperty('--turn', `${turns * 720}deg`); knob.classList.add('turning');
+    d.querySelector('.gacha').classList.add('shaking'); sfx('crank');
+    await new Promise(r => setTimeout(r, 1300));
+    d.querySelector('.gacha').classList.remove('shaking'); knob.classList.remove('turning');
+    const col = CAP_COLORS[Math.floor(Math.random() * CAP_COLORS.length)];
+    $('#g-out', d).innerHTML = `<button class="g-capsule dropping" id="g-cap" aria-label="打開扭蛋">${capsuleSVG(col, 64)}</button>`; sfx('drop');
+    await new Promise(r => setTimeout(r, 1100));
+    $('#g-hint', d).innerHTML = '扭蛋出咗嚟喇！撳一下打開佢 👇';
+    const cap = $('#g-cap', d); cap.classList.remove('dropping'); cap.classList.add('ready');
+    cap.onclick = () => openCap(col);
+    busy = false;
+  };
+  const openCap = (col) => {
+    const cap = $('#g-cap', d); if (!cap || cap.classList.contains('opened')) return;
+    cap.classList.add('opened'); sfx('pop');
+    const res = $('#g-result', d);
+    res.innerHTML = `<div class="g-paper" style="--c1:${col[0]}"><div class="g-paper-cap">🎐 今日主題</div><div class="g-paper-title">${esc(pick.title)}</div>
+      ${pick.effect === 'no_deduct' ? '<div class="chip good">😇 今日老師唔扣分</div>' : ''}</div>
+      <div class="row" style="justify-content:center"><button class="btn" id="g-again">🔄 再扭一次</button><button class="btn primary" id="g-go">✅ 就係佢！開始上堂</button></div>`;
+    res.hidden = false; $('#g-hint', d).innerHTML = '🎉 今日嘅主題係……';
+    burst(res.querySelector('.g-paper'));
+    $('#g-again', d).onclick = spin;
+    $('#g-go', d).onclick = async (e) => {
+      e.target.disabled = true;
+      try {
+        const r = await PUT(`/classes/${state.classId}/day`, { date: todayStr(), title: pick.title, effect: pick.effect });
+        state.dayTheme = r.theme; drawDayTheme(); drawQuickBar(); sfx('yay');
+        res.innerHTML = `<div class="g-paper big" style="--c1:${col[0]}"><div class="g-paper-cap">🎐 今日主題</div><div class="g-paper-title">${esc(pick.title)}</div></div>
+          <div class="row" style="justify-content:center"><button class="btn" data-close>開始上堂 ✨</button><button class="btn primary" id="g-q">下一步：每日一題 ❓</button></div>`;
+        $('#g-q', d).onclick = () => { d.close(); dailyQuestion(); };
+      } catch (err) { e.target.disabled = false; fail(err); }
+    };
+  };
+  const burst = (el) => {
+    for (let i = 0; i < 26; i++) { const sp = document.createElement('i'); sp.className = 'spark'; const a = Math.PI * 2 * i / 26; const dd = 110 + Math.random() * 120;
+      sp.style.cssText = `left:50%;top:40%;--dx:${Math.cos(a) * dd}px;--dy:${Math.sin(a) * dd}px;background:${['var(--gold)', 'var(--accent)', 'var(--sky)', 'var(--mint)', 'var(--lav)'][i % 5]}`; el.appendChild(sp); }
+  };
+  knob.onclick = spin;
+  const showEditor = () => {
+    const ed = $('#g-editor', d); ed.hidden = false;
+    ed.innerHTML = `<h3>✏️ 主題（扭蛋機會由呢度隨機抽）</h3>
+      <div class="theme-list">${themes.map(t => `<div class="theme-item"><span>${esc(t.title)}</span>${t.effect === 'no_deduct' ? '<span class="chip good small">唔扣分</span>' : ''}<button class="btn sm ghost" data-del-theme="${t.id}" aria-label="刪除">✕</button></div>`).join('') || '<p class="muted small">未有主題</p>'}</div>
+      <form class="theme-add" id="theme-add"><input class="input" id="theme-title" maxlength="60" required placeholder="例如：今日全班可以不停加分！">
+        <select class="input" id="theme-effect" aria-label="規則"><option value="">無特別規則</option><option value="no_deduct">今日老師唔扣分</option></select><button class="btn primary">加入</button></form>
+      <button class="btn sm" id="theme-defaults">加入建議主題</button>`;
+    $('#theme-add', ed).onsubmit = async (e) => { e.preventDefault(); try { themes = await POST('/themes', { title: $('#theme-title', ed).value, effect: $('#theme-effect', ed).value }); state.boot.lesson_themes = themes; showEditor(); $('#theme-title', ed).focus(); } catch (err) { fail(err); } };
+    $('#theme-defaults', ed).onclick = async () => { try { themes = await POST('/themes/defaults'); state.boot.lesson_themes = themes; showEditor(); } catch (err) { fail(err); } };
+    ed.querySelectorAll('[data-del-theme]').forEach(b => { b.onclick = async () => { try { themes = await DEL(`/themes/${b.dataset.delTheme}`); state.boot.lesson_themes = themes; showEditor(); } catch (err) { fail(err); } }; });
+    $('#g-edit', d).textContent = `✏️ 編輯主題（${themes.length}）`;
+  };
+  $('#g-edit', d).onclick = () => { if ($('#g-editor', d).hidden) showEditor(); else $('#g-editor', d).hidden = true; };
+}
+
+// ---------- 寵物巡遊：全班寵物喺草地上行嚟行去（大螢幕用） ----------
+async function openParade() {
+  const withPets = students().filter(s => s.pet && !state.absent.has(s.id));
+  if (!withPets.length) return toast('未有寵物，先去「寵物」頁派蛋', { error: true });
+  let coll = []; try { coll = await GET(`/classes/${state.classId}/collection`); } catch { /* 冇寵物庫都照行 */ }
+  const ov = document.createElement('div'); ov.className = 'parade'; ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-label', '寵物巡遊');
+  ov.innerHTML = `<div class="pr-sky"><span class="pr-sun"></span><span class="pr-cloud c1"></span><span class="pr-cloud c2"></span><span class="pr-cloud c3"></span></div>
+    <div class="pr-hill h1"></div><div class="pr-hill h2"></div><div class="pr-field" id="pr-field"></div>
+    <div class="pr-bar"><b>🌈 ${esc(state.cls.class.name)} 寵物巡遊</b>
+      ${coll.length ? '<label class="pr-toggle"><input type="checkbox" id="pr-coll"> 連寵物庫一齊行</label>' : ''}
+      <button class="btn sm" id="pr-fs">⛶ 全螢幕</button><button class="btn sm" id="pr-close">✕ 關閉</button></div>
+    <div class="pr-tip">撳一下寵物，佢會跳起同你打招呼！</div>`;
+  document.body.appendChild(ov);
+  const field = $('#pr-field', ov); let sprites = []; let raf = 0; let last = performance.now();
+  const build = (includeColl) => {
+    field.innerHTML = '';
+    const list = withPets.map(s => ({ s, html: avatar(s), label: s.name }));
+    if (includeColl) coll.forEach(c => { const o = students().find(x => x.id === c.student_record_id); if (o) list.push({ s: o, html: dexImage(c.species_key, 'evolved'), label: `${o.name}嘅寵物庫`, small: true }); });
+    sprites = list.slice(0, 48).map((it, i) => {
+      const el = document.createElement('button'); el.className = 'pr-pet' + (it.small ? ' small' : '');
+      el.innerHTML = `<span class="pr-body">${it.html}</span><span class="pr-name">${esc(it.label)}</span>`;
+      field.appendChild(el);
+      const sp = { el, x: Math.random() * 90 + 5, y: Math.random() * 70 + 5, vx: (Math.random() < .5 ? -1 : 1) * (4 + Math.random() * 6), pause: Math.random() * 3, it };
+      el.onclick = () => { el.classList.remove('jump'); void el.offsetWidth; el.classList.add('jump'); sfx('pop');
+        const h = document.createElement('span'); h.className = 'pr-heart'; h.textContent = ['💖', '⭐', '🎵', '✨'][Math.floor(Math.random() * 4)]; el.appendChild(h); setTimeout(() => h.remove(), 1200); };
+      return sp;
+    });
+  };
+  const tick = (t) => {
+    const dt = Math.min(0.05, (t - last) / 1000); last = t;
+    for (const sp of sprites) {
+      if (sp.pause > 0) { sp.pause -= dt; sp.el.classList.add('idle'); }
+      else {
+        sp.el.classList.remove('idle'); sp.x += sp.vx * dt;
+        if (sp.x < 3 || sp.x > 95) { sp.vx *= -1; sp.x = Math.max(3, Math.min(95, sp.x)); }
+        if (Math.random() < dt * 0.25) sp.pause = 1 + Math.random() * 2.5; // 間中停低望下
+        if (Math.random() < dt * 0.08) sp.vx *= -1;
+      }
+      const depth = sp.y / 75; // 越近越大
+      sp.el.style.left = sp.x + '%'; sp.el.style.bottom = (4 + (1 - depth) * 52) + '%';
+      sp.el.style.setProperty('--scale', String(0.6 + depth * 0.55)); sp.el.style.zIndex = String(10 + Math.round(depth * 100));
+      sp.el.style.setProperty('--dir', sp.vx < 0 ? '-1' : '1');
+    }
+    raf = requestAnimationFrame(tick);
+  };
+  build(false); raf = requestAnimationFrame(tick);
+  const close = () => { cancelAnimationFrame(raf); if (document.fullscreenElement === ov) document.exitFullscreen().catch(() => {}); ov.remove(); document.removeEventListener('keydown', esc_); };
+  const esc_ = (e) => { if (e.key === 'Escape' && !document.fullscreenElement) close(); };
+  document.addEventListener('keydown', esc_);
+  $('#pr-close', ov).onclick = close;
+  $('#pr-fs', ov).onclick = () => { (document.fullscreenElement ? document.exitFullscreen() : ov.requestFullscreen?.())?.catch?.(() => {}); };
+  const tg = $('#pr-coll', ov); if (tg) tg.onchange = () => build(tg.checked);
+}
+
+// ---------- 每日一題：抽一位同學答問題，答啱即加分 ----------
+function dailyQuestion() {
+  const pool = present().length ? present() : students();
+  if (!pool.length) return toast('此班未有學生', { error: true });
+  let who = pool[Math.floor(Math.random() * pool.length)]; let [q, a] = randomQuestion();
+  const d = openDialog(`<div class="sheet-head"><h2>❓ 每日一題</h2><button class="btn ghost" data-close>✕</button></div>
+    <div class="unlock dq">
+      <div class="dq-who" id="dq-who"></div>
+      <div class="q-card"><div class="q-label">今日問題</div><div class="q-text" id="dq-text"></div>
+        <button class="btn ghost sm" id="dq-show">👀 顯示答案</button><div class="q-ans" id="dq-ans" hidden></div></div>
+      <div class="row" style="justify-content:center"><button class="btn sm" id="dq-next">🎲 換一題</button><button class="btn sm" id="dq-repick">🔄 換人</button></div>
+      <input class="input" id="dq-own" maxlength="80" placeholder="✏️ 或者自己出題">
+      <div class="row" style="justify-content:center"><button class="btn" id="dq-no">未答啱 💪</button><button class="btn primary" id="dq-ok">答啱咗！+1 分 🎉</button></div>
+    </div>`, { full: true });
+  const draw = () => {
+    $('#dq-who', d).innerHTML = `${avatar(who, 110)}<b>${who.number ?? ''} ${esc(who.name)}</b>`;
+    $('#dq-text', d).textContent = q; $('#dq-ans', d).textContent = a; $('#dq-ans', d).hidden = true; $('#dq-show', d).style.display = a ? '' : 'none';
+  };
+  draw();
+  $('#dq-next', d).onclick = () => { [q, a] = randomQuestion(); $('#dq-own', d).value = ''; draw(); };
+  $('#dq-repick', d).onclick = () => { const others = pool.filter(x => x.id !== who.id); if (others.length) who = others[Math.floor(Math.random() * others.length)]; draw(); };
+  $('#dq-show', d).onclick = () => { $('#dq-ans', d).hidden = false; $('#dq-show', d).style.display = 'none'; };
+  $('#dq-own', d).oninput = (e) => { const v = e.target.value.trim(); if (v) { q = v; a = ''; draw(); } };
+  $('#dq-no', d).onclick = () => { d.close(); toast(`${who.name} 加油！下次一定得 💪`); };
+  $('#dq-ok', d).onclick = async (e) => {
+    e.target.disabled = true;
+    try { d.close(); await givePoints([who.id], { delta: 1, reason: '每日一題答啱' }); if ($('#room-grid')) drawRoomGrid(); }
     catch (err) { fail(err); }
   };
 }
@@ -1509,6 +1717,87 @@ function renderPets() {
   };
 }
 
+// ---------- 成就徽章（由現有紀錄即時計出）及圖鑑大師證書 ----------
+function badgeList(s, d) {
+  const coll = d.collection || []; const species = new Set(coll.map(c => c.species_key)); const pet = s.pet;
+  const ev = (d.events || []).filter(e => !e.undone_at);
+  const hw = (d.homework || []).filter(h => h.status).slice(0, 5);
+  let gear = []; try { gear = JSON.parse(s.gear || '[]'); } catch { /* 冇飾物 */ }
+  return [
+    ['🐣', '第一次孵化', '寵物孵化成寶寶', !!pet && pet.stage !== 'egg' || coll.length > 0],
+    ['🦋', '培育完成', '培育一隻寵物到「進化」', coll.length > 0 || pet?.stage === 'evolved'],
+    ['🏆', '寵物庫 3 隻', '寵物庫有 3 隻寵物', coll.length >= 3],
+    ['🌈', '收集 3 個品種', '寵物庫有 3 個唔同品種', species.size >= 3],
+    ['👑', '圖鑑大師', '集齊全部 8 個品種', species.size >= 8],
+    ['📗', '功課達人', '最近 5 份功課全部準時交', hw.length >= 5 && hw.every(h => h.status === 'submitted')],
+    ['💯', '百分學生', '總分達到 100 分', s.score >= 100],
+    ['❓', '答題高手', '每日一題答啱 5 次', ev.filter(e => e.reason === '每日一題答啱').length >= 5],
+    ['🤝', '樂於助人', '因「幫助同學」加分 3 次', ev.filter(e => e.tag_label === '幫助同學').length >= 3],
+    ['🔓', '解凍勇士', '答啱問題，幫寵物解除冰封', !!pet?.unlocked_at],
+    ['🛍️', '時尚寵物', '幫寵物戴上飾物', gear.length > 0],
+  ];
+}
+function badgePanel(s, d) {
+  const list = badgeList(s, d); const got = list.filter(b => b[3]).length;
+  const master = new Set((d.collection || []).map(c => c.species_key)).size >= SPECIES.length;
+  return `<section class="panel"><h2>🏅 成就徽章 <span class="muted small">${got}／${list.length}</span></h2>
+    <div class="badges">${list.map(([icon, name, how, ok]) => `<div class="badge ${ok ? 'got' : ''}" title="${esc(how)}"><span class="b-icon">${icon}</span><b>${esc(name)}</b><span class="small muted">${ok ? '已獲得' : esc(how)}</span></div>`).join('')}</div>
+    ${master ? '<div class="row" style="justify-content:center;margin-top:10px"><button class="btn primary" data-act="cert">🎓 列印圖鑑大師證書</button></div>' : ''}
+  </section>`;
+}
+function openCertificate(s, coll) {
+  const firstOf = new Map(); (coll || []).forEach(c => { if (!firstOf.has(c.species_key)) firstOf.set(c.species_key, c); });
+  const lastDone = [...firstOf.values()].map(c => c.completed_at).sort().pop();
+  const html = `<div class="cert"><div class="cert-in">
+      <div class="cert-top">🎓 圖鑑大師證書 🎓</div>
+      <div class="cert-sub">茲證明</div>
+      <div class="cert-name">${esc(s.name)}</div>
+      <div class="cert-text">${esc(state.cls?.class?.name || '')} 同學用心學習、積極表現，成功培育並集齊全部 ${SPECIES.length} 個品種嘅寵物，特頒此證，以資鼓勵！</div>
+      <div class="cert-pets">${SPECIES.map(sp => `<div>${dexImage(sp.key, 'evolved')}<span>${esc(sp.name)}</span></div>`).join('')}</div>
+      <div class="cert-foot"><span>老師：${esc(state.teacher?.name || '')}</span><span>日期：${(() => { const t = new Date(lastDone || Date.now()); return `${t.getFullYear()}年${t.getMonth() + 1}月${t.getDate()}日`; })()}</span></div>
+    </div></div>`;
+  const d = openDialog(`<div class="sheet-head"><h2>🎓 圖鑑大師證書</h2><button class="btn ghost" data-close>✕</button></div>
+    <div class="cert-preview">${html}</div><div class="row" style="justify-content:center;margin-top:12px"><button class="btn primary" id="cert-print">🖨️ 列印（A4 橫向）</button></div>`, { full: true });
+  $('#cert-print', d).onclick = () => {
+    const box = document.createElement('div'); box.className = 'cert-print'; box.innerHTML = html; document.body.appendChild(box);
+    document.body.classList.add('print-cert');
+    const done = () => { box.remove(); document.body.classList.remove('print-cert'); window.removeEventListener('afterprint', done); };
+    window.addEventListener('afterprint', done); window.print(); setTimeout(done, 60000);
+  };
+}
+
+// ---------- 寵物飾物店：用可用分數（總分減已兌換）購買，每個位置戴一件 ----------
+async function openShop(s, after) {
+  let data; try { data = await GET(`/students/${s.id}/accessories`); } catch (err) { return fail(err); }
+  const SLOT = { head: '頭頂', face: '面', neck: '頸', side: '身邊' };
+  const d = openDialog(`<div class="sheet-head"><h2>🛍️ 寵物飾物店</h2><button class="btn ghost" data-close>✕</button></div><div class="shop" id="shop"></div>`, { full: true });
+  const sync = (stu) => { const st = students().find(x => x.id === stu.id); if (st) { st.gear = stu.gear; st.spent = stu.spent; st.score = stu.score; } Object.assign(s, { gear: stu.gear, spent: stu.spent }); };
+  const draw = (flash) => {
+    const stu = data.student; const avail = stu.score - stu.spent; const owned = new Map(data.owned.map(o => [o.item_key, o]));
+    $('#shop', d).innerHTML = `<div class="shop-top"><div class="shop-pet${flash ? ' sparkle' : ''}">${avatar(stu, 150)}</div>
+        <div><b class="shop-name">${esc(stu.name)}</b><div class="shop-pts">可用分數 <b class="num">${avail}</b> 分</div><div class="muted small">買飾物會用可用分數，總分同寵物 XP 唔變。換新蛋都會保留飾物。</div></div></div>
+      <div class="shop-grid">${ACCESSORIES.map(a => { const o = owned.get(a.key);
+        return `<div class="shop-item${o?.equipped ? ' on' : ''}"><span class="shop-icon">${a.icon}</span><b>${esc(a.name)}</b><span class="muted small">${SLOT[a.slot]}・${a.cost} 分</span>
+          ${o ? `<button class="btn sm ${o.equipped ? '' : 'primary'}" data-wear="${a.key}" data-on="${o.equipped ? 0 : 1}">${o.equipped ? '除低' : '戴上'}</button><button class="link-btn small" data-refund="${a.key}">退回</button>`
+            : `<button class="btn sm primary" data-buy="${a.key}"${avail < a.cost ? ' disabled' : ''}>${avail < a.cost ? `差 ${a.cost - avail} 分` : '買'}</button>`}</div>`; }).join('')}</div>`;
+  };
+  draw();
+  d.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-buy],[data-wear],[data-refund]'); if (!b) return;
+    b.disabled = true;
+    try {
+      if (b.dataset.buy) { data = await POST(`/students/${s.id}/accessories`, { item_key: b.dataset.buy }); sfx('yay'); toast(`已買「${accessoryByKey[b.dataset.buy].name}」！`); }
+      if (b.dataset.wear) data = await PATCH(`/students/${s.id}/accessories/${b.dataset.wear}`, { equipped: b.dataset.on === '1' });
+      if (b.dataset.refund) {
+        if (!(await confirmBox(`退回「${accessoryByKey[b.dataset.refund].name}」？分數會退返俾 ${s.name}。`, { ok: '退回' }))) { b.disabled = false; return; }
+        data = await DEL(`/students/${s.id}/accessories/${b.dataset.refund}`);
+      }
+      sync(data.student); draw(!!b.dataset.buy); if ($('#room-grid')) drawRoomGrid();
+    } catch (err) { b.disabled = false; fail(err); }
+  });
+  d.addEventListener('close', () => after?.());
+}
+
 // ---------- 寵物庫：培育完成嘅寵物放入寵物庫，再揀下一隻蛋 ----------
 function collectionPanel(s, coll) {
   const have = new Set(coll.map(c => c.species_key));
@@ -1661,11 +1950,12 @@ async function renderStudent(id) {
           <div style="display:flex;justify-content:space-between" class="small"><span>XP <b class="num">${pet.xp}</b></span><span>${p.next ? `再 ${p.remaining} XP ${pet.stage === 'egg' ? '孵化' : '成為' + STAGE_LABELS[p.next]}` : '已完全進化'}</span></div>
           ${xpBar(pet, th)}
           <div class="timeline">${STAGES.map((st, i) => `<div class="${i <= STAGES.indexOf(pet.stage) ? '' : 'locked'} ${st === pet.stage ? 'cur' : ''}">${dexImage(pet.species_key, st)}<div class="t">${STAGE_LABELS[st]}</div></div>`).join('')}</div>
-          <div class="row" style="justify-content:center">${pet.locked ? '<button class="btn sm primary" data-act="unlock">🔓 問問題解鎖</button>' : ''}${pet.stage === 'evolved' && !pet.locked ? '<button class="btn sm primary" data-act="nextegg">🏆 放入寵物庫・揀下一隻蛋</button>' : ''}<button class="btn sm" data-act="rename">改名</button>${pet.stage === 'egg' ? '<button class="btn sm" data-act="swap">更換蛋</button>' : ''}</div>`
+          <div class="row" style="justify-content:center">${pet.locked ? '<button class="btn sm primary" data-act="unlock">🔓 問問題解鎖</button>' : ''}${pet.stage === 'evolved' && !pet.locked ? '<button class="btn sm primary" data-act="nextegg">🏆 放入寵物庫・揀下一隻蛋</button>' : ''}<button class="btn sm" data-act="shop">🛍️ 飾物店</button><button class="btn sm" data-act="rename">改名</button>${pet.stage === 'egg' ? '<button class="btn sm" data-act="swap">更換蛋</button>' : ''}</div>`
         : `<h2>未派蛋</h2><p class="muted small">到「寵物」頁為這位學生派蛋。派蛋之後的加分才會成為 XP。</p><a class="btn" href="#/c/${d.class.id}/pets">去派蛋</a>`}
       </section>
       <div class="stack">
         ${pet || d.collection.length ? collectionPanel(s, d.collection) : ''}
+        ${badgePanel(s, d)}
         <section class="panel"><h2>功課</h2>
           <div class="row">${HW_STATUS.map(([k, l]) => `<span class="chip">${l} <b class="num">${hwCount(k)}</b></span>`).join('')}<span class="chip">共 <b class="num">${d.homework.length}</b> 份</span></div>
           ${d.homework.filter(h => h.status === 'missing' || h.status === 'late').length ? `<p class="small" style="margin-bottom:0">需要跟進：${d.homework.filter(h => h.status === 'missing' || h.status === 'late').map(h => `${esc(h.title)}（${HW_STATUS.find(x => x[0] === h.status)[1]}）`).join('、')}</p>` : ''}</section>
@@ -1683,6 +1973,8 @@ async function renderStudent(id) {
     obs.observe(document.body, { childList: true });
   };
   ACT.unlock = () => unlockFlow(s, () => renderStudent(id).catch(fail));
+  ACT.shop = () => openShop(s, () => renderStudent(id).catch(fail));
+  ACT.cert = () => openCertificate(s, d.collection);
   ACT.nextegg = () => nextEggFlow(s, () => renderStudent(id).catch(fail), d.collection);
   ACT.rename = () => editDialog('寵物名字（最多 12 字，留空即取消）', pet.nickname || '', async (v) => { await PATCH(`/pets/${pet.id}`, { nickname: v }); await reloadClass(); renderStudent(id); });
   ACT.swap = () => {

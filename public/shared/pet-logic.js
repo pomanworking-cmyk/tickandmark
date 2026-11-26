@@ -162,3 +162,29 @@ export function lockInfo(pet, rows, days = DEFAULT_LOCK_DAYS, now = new Date()) 
   }
   return titles.length ? { locked: true, titles } : none;
 }
+
+// ---------- 寵物飾物（用兌換分數購買；每個位置只可以戴一件） ----------
+// slot：head 頭頂、face 面、neck 頸、side 身邊
+export const ACCESSORIES = [
+  { key: 'flower', name: '小花', icon: '🌸', slot: 'head', cost: 8 },
+  { key: 'bow', name: '蝴蝶結', icon: '🎀', slot: 'head', cost: 12 },
+  { key: 'tophat', name: '紳士帽', icon: '🎩', slot: 'head', cost: 20 },
+  { key: 'crown', name: '皇冠', icon: '👑', slot: 'head', cost: 30 },
+  { key: 'glasses', name: '太陽眼鏡', icon: '🕶️', slot: 'face', cost: 15 },
+  { key: 'scarf', name: '頸巾', icon: '🧣', slot: 'neck', cost: 12 },
+  { key: 'medal', name: '金牌', icon: '🏅', slot: 'neck', cost: 25 },
+  { key: 'balloon', name: '氣球', icon: '🎈', slot: 'side', cost: 10 },
+  { key: 'star', name: '星星', icon: '⭐', slot: 'side', cost: 15 },
+];
+export const accessoryByKey = Object.fromEntries(ACCESSORIES.map(a => [a.key, a]));
+
+// ---------- 開始課堂：每日主題（老師自己輸入；effect 可選「今日唔扣分」） ----------
+export const THEME_EFFECTS = { '': '無特別規則', no_deduct: '今日老師唔扣分' };
+export const DEFAULT_THEMES = [
+  ['加分狂熱日：表現好就不停加分！', ''],
+  ['老師今日唔扣分 😇', 'no_deduct'],
+  ['安靜小勇士：全堂保持安靜有獎', ''],
+  ['小組合作日：幫到組員就加分', ''],
+  ['舉手達人：主動舉手答問題加分', ''],
+  ['寵物開心日：交齊功課，寵物同你一齊慶祝', ''],
+];

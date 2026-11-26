@@ -645,3 +645,63 @@ test('寵物庫：進化後放入寵物庫，再揀下一隻蛋（伺服器與�
   assert.equal(s.afterDelete, 0);
   assert.deepEqual(d, s, '示範後端與伺服器結果一致');
 });
+
+test('每日主題、飾物店（伺服器與示範後端一致）', async () => {
+  const { openSqlite } = await import('../server/db-sqlite.js');
+  const { createApp } = await import('../server/app.js');
+  const server = () => {
+    const db = openSqlite(':memory:'); const app = createApp({ db, allowRegistration: true }); let cookie = '';
+    return async (method, path, body, query = {}) => {
+      const r = await app({ method, path, query, headers: { 'x-tm': '1', cookie }, bodyText: body ? JSON.stringify(body) : '', ip: '1' });
+      const sc = r.headers['Set-Cookie']; if (sc) cookie = sc.split(';')[0];
+      if (r.status >= 400) { const e = new Error(r.body.error); e.status = r.status; throw e; }
+      return r.body;
+    };
+  };
+  const demo = () => { const be = createDemoBackend(); return (m, p, b, q) => be.request(m, q ? `${p}?${new URLSearchParams(q)}` : p, b); };
+  const strip = (x) => JSON.parse(JSON.stringify(x, (k, v) => (/_at$/.test(k) ? (v ? 'T' : v) : v)));
+  const run = async (call) => {
+    const out = {};
+    await call('POST', '/auth/register', { email: 'g@x.hk', name: 'G', password: 'Password123' });
+    const boot = await call('GET', '/bootstrap'); out.defaultThemes = boot.lesson_themes.map(t => [t.title, t.effect]);
+    let th = await call('POST', '/themes', { title: '今日全班可以不停加分', effect: '' });
+    th = await call('DELETE', `/themes/${th[th.length - 1].id}`); out.themes = th.map(t => t.title);
+    await assert.rejects(call('POST', '/themes', { title: '' }), /主題/);
+    await assert.rejects(call('POST', '/themes', { title: 'x', effect: 'boom' }), /規則/);
+    th = await call('POST', '/themes/defaults'); out.afterDefaults = th.length;
+    const c = await call('POST', '/classes', { name: '5C' });
+    out.day0 = await call('GET', `/classes/${c.id}/day`, null, { date: '2026-11-27' });
+    out.day1 = await call('PUT', `/classes/${c.id}/day`, { date: '2026-11-27', title: '老師今日唔扣分 😇', effect: 'no_deduct' });
+    out.day2 = await call('PUT', `/classes/${c.id}/day`, { date: '2026-11-27', title: '小組合作日', effect: '' });
+    out.dayGet = await call('GET', `/classes/${c.id}/day`, null, { date: '2026-11-27' });
+    out.otherDay = await call('GET', `/classes/${c.id}/day`, null, { date: '2026-11-28' });
+    // 飾物
+    const [s1] = (await call('POST', `/classes/${c.id}/students`, { students: [{ name: 'S1', score: 50 }] })).created;
+    let r = await call('POST', `/students/${s1.id}/accessories`, { item_key: 'bow' });
+    r = await call('POST', `/students/${s1.id}/accessories`, { item_key: 'crown' }); // 同位置：自動除低蝴蝶結
+    out.buy = { gear: r.student.gear, spent: r.student.spent, owned: strip(r.owned).map(a => [a.item_key, a.equipped]) };
+    await assert.rejects(call('POST', `/students/${s1.id}/accessories`, { item_key: 'crown' }), /已經買咗/);
+    await assert.rejects(call('POST', `/students/${s1.id}/accessories`, { item_key: 'tophat' }), /不夠/);
+    await assert.rejects(call('POST', `/students/${s1.id}/accessories`, { item_key: 'nope' }), /未知/);
+    r = await call('PATCH', `/students/${s1.id}/accessories/bow`, { equipped: true });
+    out.swap = r.student.gear;
+    r = await call('PATCH', `/students/${s1.id}/accessories/bow`, { equipped: false });
+    out.off = r.student.gear;
+    r = await call('DELETE', `/students/${s1.id}/accessories/crown`);
+    out.refund = { spent: r.student.spent, owned: r.owned.map(a => a.item_key) };
+    out.full = (await call('GET', `/classes/${c.id}/full`)).students.map(s => [s.gear, s.spent]);
+    await call('DELETE', `/classes/${c.id}`);
+    out.classes = (await call('GET', '/classes')).length;
+    return JSON.parse(JSON.stringify(out));
+  };
+  const s = await run(server()); const d = await run(demo());
+  assert.equal(s.defaultThemes.length, 6); assert.ok(s.defaultThemes.some(([, e]) => e === 'no_deduct'));
+  assert.equal(s.themes.length, 6); assert.equal(s.afterDefaults, 6);
+  assert.deepEqual(s.day0, { theme: null }); assert.equal(s.day1.theme.effect, 'no_deduct');
+  assert.deepEqual(s.dayGet, { theme: { date: '2026-11-27', title: '小組合作日', effect: '' } }); assert.deepEqual(s.otherDay, { theme: null });
+  assert.deepEqual(s.buy, { gear: '["crown"]', spent: 42, owned: [['bow', 0], ['crown', 1]] });
+  assert.equal(s.swap, '["bow"]'); assert.equal(s.off, '[]');
+  assert.deepEqual(s.refund, { spent: 12, owned: ['bow'] });
+  assert.deepEqual(s.full, [['[]', 12]]); assert.equal(s.classes, 0);
+  assert.deepEqual(d, s, '示範後端與伺服器結果一致');
+});

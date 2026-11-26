@@ -553,6 +553,79 @@ try:
         check('寵物庫：寵物頁顯示全班寵物庫', page.locator('.coll-row').count() == 1)
         check('寵物庫：資料一致性檢查無問題', api(page, 'GET', '/audit')['problems'] == [])
 
+        # 開始課堂：扭蛋機抽今日主題（自訂主題、唔扣分規則）
+        goto(page, BASE + f"#/c/{ids['6C']}/room"); page.wait_for_selector('#room-grid .stu')
+        page.click('[data-act=gacha]'); page.wait_for_selector('#g-knob')
+        page.click('#g-edit'); page.wait_for_selector('#theme-add')
+        for t in [x['id'] for x in api(page, 'GET', '/themes')]: api(page, 'DELETE', f'/themes/{t}')
+        page.click('#g-edit'); page.click('#g-edit'); page.fill('#theme-title', '今日老師唔可以扣分'); page.select_option('#theme-effect', 'no_deduct'); page.click('#theme-add button')
+        wait_js(page, "document.querySelectorAll('.theme-item').length === 1")
+        check('扭蛋機：老師可以自己輸入主題', page.inner_text('.theme-item') .startswith('今日老師唔可以扣分'))
+        page.click('#g-knob'); wait_js(page, "!!document.querySelector('#g-knob.turning') || !!document.querySelector('#g-cap')")
+        check('扭蛋機：撳掣個掣會轉', page.evaluate("getComputedStyle(document.getElementById('g-knob')).getPropertyValue('--turn').trim()") == '720deg')
+        page.wait_for_selector('#g-cap.ready', timeout=6000); page.click('#g-cap', force=True); page.wait_for_selector('.g-paper')
+        check('扭蛋機：扭蛋打開顯示主題', '今日老師唔可以扣分' in page.inner_text('.g-paper-title'))
+        page.screenshot(path=f'{OUT}/gacha-open.png')
+        page.click('#g-go', force=True); page.wait_for_selector('#g-q')
+        page.click('dialog button:has-text("開始上堂 ✨")', force=True); page.wait_for_selector('#day-theme:not([hidden])')
+        check('今日主題顯示喺課室', '今日老師唔可以扣分' in page.inner_text('#day-theme'))
+        day = api(page, 'GET', f"/classes/{ids['6C']}/day?date=" + page.evaluate("(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })()"))
+        check('今日主題已儲存', day['theme'] and day['theme']['effect'] == 'no_deduct')
+        s6 = api(page, 'GET', f"/classes/{ids['6C']}/full")['students']; t6 = s6[0]
+        if page.locator('.qchip[data-q="menu"]').count(): page.click('.qchip[data-q="menu"]')
+        page.click(f'.stu[data-id="{t6["id"]}"]', position={'x': 20, 'y': 12}); page.wait_for_selector('dialog .quick')
+        page.click('dialog .quick [data-d="-1"]'); page.wait_for_selector('text=今日唔扣分')
+        check('今日唔扣分：扣分被擋住', api(page, 'GET', f"/students/{t6['id']}")['student']['score'] == t6['score'])
+        page.keyboard.press('Escape'); page.wait_for_timeout(200)
+        # 每日一題
+        page.click('[data-act=dailyq]'); page.wait_for_selector('#dq-text')
+        who = page.inner_text('#dq-who b'); before_total = sum(x['score'] for x in api(page, 'GET', f"/classes/{ids['6C']}/full")['students'])
+        page.click('#dq-ok'); page.wait_for_selector('.celebrate .cele-card')
+        after_total = sum(x['score'] for x in api(page, 'GET', f"/classes/{ids['6C']}/full")['students'])
+        check('每日一題：答啱即加 1 分', after_total == before_total + 1, who)
+        page.click('.celebrate .cele-card')
+        # 寵物巡遊
+        page.click('[data-act=parade]'); page.wait_for_selector('.parade .pr-pet'); page.wait_for_timeout(800)
+        pos1 = page.evaluate("[...document.querySelectorAll('.pr-pet')].map(e => e.style.left).join()"); page.wait_for_timeout(900)
+        pos2 = page.evaluate("[...document.querySelectorAll('.pr-pet')].map(e => e.style.left).join()")
+        check('寵物巡遊：全班寵物喺草地上行', page.locator('.pr-pet').count() == len([x for x in s6 if x['pet']]) and pos1 != pos2)
+        page.screenshot(path=f'{OUT}/parade.png'); page.click('#pr-close')
+        # 飾物店
+        rich = max(s6, key=lambda x: x['score'] - x['spent'])
+        goto(page, BASE + f"#/s/{rich['id']}"); page.wait_for_selector('[data-act=shop]'); page.click('[data-act=shop]'); page.wait_for_selector('.shop-item')
+        page.click('[data-buy="flower"]'); page.wait_for_selector('text=已買「小花」')
+        st = api(page, 'GET', f"/students/{rich['id']}")['student']
+        check('飾物店：買咗會扣可用分數，總分唔變', st['spent'] == rich['spent'] + 8 and st['score'] == rich['score'] and st['gear'] == '["flower"]')
+        check('飾物店：寵物戴上飾物', page.locator('.shop-pet .gear-head').inner_text() == '🌸')
+        page.screenshot(path=f'{OUT}/shop.png'); page.keyboard.press('Escape')
+        goto(page, BASE + f"#/c/{ids['6C']}/room"); page.wait_for_selector(f'.stu[data-id="{rich["id"]}"] .gear-head')
+        check('飾物店：課室學生卡都見到飾物', page.inner_text(f'.stu[data-id="{rich["id"]}"] .gear-head') == '🌸')
+        # 進化大場面
+        egg = next((x for x in api(page, 'GET', f"/classes/{ids['6C']}/full")['students'] if x['pet'] and x['pet']['stage'] == 'egg' and not x['pet']['locked']), None)
+        if egg:
+            api(page, 'PUT', f"/classes/{ids['6C']}/day", {'date': day['theme']['date'], 'title': None})
+            if page.locator('.qchip[data-q="d:3"]').count() == 0: page.click('.qchip[data-q="menu"]')
+            page.click('.qchip[data-q="d:3"]'); page.click(f'.stu[data-id="{egg["id"]}"]', position={'x': 20, 'y': 12}); page.click(f'.stu[data-id="{egg["id"]}"]', position={'x': 20, 'y': 12})
+            page.wait_for_selector('.celebrate.evolve .evo-stage', timeout=8000)
+            check('孵化大場面：舊樣震動、閃光、新樣出現', page.locator('.celebrate.evolve .evo-old[data-stage="egg"]').count() == 1)
+            page.wait_for_timeout(1800); page.screenshot(path=f'{OUT}/evolve.png')
+            page.click('.celebrate .cele-card'); page.click('.qchip[data-q="menu"]')
+        # 成就徽章、圖鑑大師證書：用 API 集齊 8 個品種
+        m = next(x for x in reversed(api(page, 'GET', f"/classes/{ids['6C']}/full")['students']) if x['pet']); mid = m['id']
+        for i, sp in enumerate(['fire_fox', 'metal_cat', 'wood_deer', 'water_otter', 'earth_bear', 'metal_bird', 'wood_rabbit', 'water_koi']):
+            pet = api(page, 'GET', f'/students/{mid}')['student']['pet']
+            if pet['locked']: api(page, 'POST', f"/pets/{pet['id']}/unlock")
+            api(page, 'POST', '/points', {'class_id': ids['6C'], 'student_ids': [mid], 'delta': 100, 'client_batch_id': f'master-{i}a'})
+            api(page, 'POST', '/points', {'class_id': ids['6C'], 'student_ids': [mid], 'delta': 100, 'client_batch_id': f'master-{i}b'})
+            api(page, 'POST', f"/pets/{pet['id']}/next-egg", {'species_key': ['metal_cat', 'wood_deer', 'water_otter', 'earth_bear', 'metal_bird', 'wood_rabbit', 'water_koi', 'fire_fox'][i]})
+        goto(page, BASE + f'#/s/{mid}'); page.wait_for_selector('.badges')
+        got = page.eval_on_selector_all('.badge.got b', 'els => els.map(e => e.textContent)')
+        check('成就徽章：顯示已獲得徽章', '圖鑑大師' in got and '寵物庫 3 隻' in got and '百分學生' in got, ','.join(got))
+        page.click('[data-act=cert]'); page.wait_for_selector('.cert-name')
+        check('圖鑑大師證書：學生名同 8 個品種', page.inner_text('.cert-preview .cert-name') == m['name'] and page.locator('.cert-preview .cert-pets .avatar').count() == 8)
+        page.screenshot(path=f'{OUT}/certificate.png'); page.keyboard.press('Escape')
+        check('新功能後資料一致性檢查無問題', api(page, 'GET', '/audit')['problems'] == [])
+
         # 私隱：另一位老師
         other = br.new_context().new_page(); other.goto(BASE)
         other.evaluate("fetch('/api/auth/register', { method: 'POST', headers: { 'content-type': 'application/json', 'x-tm': '1' }, body: JSON.stringify({ email: 'lee@school.edu.hk', name: '李老師', password: 'Password123' }) })")

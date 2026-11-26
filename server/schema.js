@@ -238,4 +238,34 @@ CREATE TABLE IF NOT EXISTS login_attempts (
   at   INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_login_attempts ON login_attempts(key, at);
+
+-- 開始課堂扭蛋機：老師自訂嘅每日主題
+CREATE TABLE IF NOT EXISTS lesson_themes (
+  id          INTEGER PRIMARY KEY,
+  teacher_id  INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+  title       TEXT NOT NULL,
+  effect      TEXT NOT NULL DEFAULT '' CHECK (effect IN ('', 'no_deduct')),
+  sort        INTEGER NOT NULL DEFAULT 0
+);
+-- 每班每日抽中嘅主題
+CREATE TABLE IF NOT EXISTS class_day_themes (
+  class_id    INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+  teacher_id  INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+  date        TEXT NOT NULL,
+  title       TEXT NOT NULL,
+  effect      TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (class_id, date)
+);
+-- 寵物飾物：屬於學生（換新蛋都保留），用兌換分數購買
+CREATE TABLE IF NOT EXISTS student_accessories (
+  id            INTEGER PRIMARY KEY,
+  teacher_id    INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+  student_id    INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  item_key      TEXT NOT NULL,
+  redemption_id INTEGER,
+  equipped      INTEGER NOT NULL DEFAULT 1,
+  created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE (student_id, item_key)
+);
 `;

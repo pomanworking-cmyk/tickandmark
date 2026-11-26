@@ -1,5 +1,5 @@
 // 介面共用工具：轉義、提示、確認、寵物頭像、加分祝賀。
-import { petImageUrl, petLabel, progressInfo, STAGE_LABELS, speciesByKey } from '../shared/pet-logic.js';
+import { petImageUrl, petLabel, progressInfo, STAGE_LABELS, speciesByKey, accessoryByKey } from '../shared/pet-logic.js';
 
 export const ASSET_BASE = globalThis.TM_ASSET_BASE || '';
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -25,6 +25,10 @@ document.addEventListener('error', (e) => {
 
 // ---------- 寵物頭像：全站只用這一個函數 ----------
 // 有寵物 → 依 StudentPet.species_key + stage 取圖；未派蛋 → 姓名首字。
+export function gearHTML(gear) {
+  let keys = []; try { keys = Array.isArray(gear) ? gear : JSON.parse(gear || '[]'); } catch { keys = []; }
+  return keys.map(k => accessoryByKey[k]).filter(Boolean).map(a => `<span class="gear gear-${a.slot}" aria-hidden="true">${a.icon}</span>`).join('');
+}
 export function avatar(student, size) {
   const style = size ? ` style="--size:${typeof size === 'number' ? size + 'px' : size}"` : '';
   const pet = student?.pet;
@@ -32,8 +36,8 @@ export function avatar(student, size) {
     return `<span class="avatar" data-student="${student?.id ?? ''}" data-species="none" data-stage="none"${style}><span class="initial" aria-label="${esc(student?.name)}（未派蛋）">${esc((student?.name || '?').slice(-1))}</span></span>`;
   }
   if (pet.student_record_id !== student.id) throw new Error('寵物與學生對應錯誤'); // 防止錯配
-  // 冰封中（欠交功課太耐）：變灰並加鎖頭
-  return `<span class="avatar${pet.locked ? ' locked' : ''}" data-student="${student.id}" data-species="${pet.species_key}" data-stage="${pet.stage}"${pet.locked ? ' data-locked="1"' : ''}${style}><img src="${petImageUrl(pet, ASSET_BASE)}" alt="${esc(petLabel(pet))}${pet.locked ? '（冰封中）' : ''}" draggable="false">${pet.locked ? '<span class="lock-badge" aria-hidden="true">🔒</span>' : ''}</span>`;
+  // 冰封中（欠交功課太耐）：變灰並加鎖頭；飾物疊喺寵物上面（唔改寵物原圖）
+  return `<span class="avatar${pet.locked ? ' locked' : ''}" data-student="${student.id}" data-species="${pet.species_key}" data-stage="${pet.stage}"${pet.locked ? ' data-locked="1"' : ''}${style}><img src="${petImageUrl(pet, ASSET_BASE)}" alt="${esc(petLabel(pet))}${pet.locked ? '（冰封中）' : ''}" draggable="false">${gearHTML(student.gear)}${pet.locked ? '<span class="lock-badge" aria-hidden="true">🔒</span>' : ''}</span>`;
 }
 // 圖鑑用：品種＋階段（不屬於任何學生）
 export function dexImage(species_key, stage, extraClass = '') {
@@ -92,8 +96,10 @@ export function celebrate(results, { label, thresholds, quick = false, fed = new
     const before = r.pet ? { ...r.pet, xp: r.pet.xp - r.xp_gained, stage: r.stage_before || r.pet.stage } : null;
     const pb = before ? progressInfo(before, thresholds).pct : 0;
     const pa = r.pet ? progressInfo(r.pet, thresholds) : null;
-    inner = `<div class="cele-card" data-cele-student="${r.student_id}">
-      ${avatar(st)}
+    // 孵化／進化：舊樣震動 → 閃光 → 新樣彈出（新樣放第一個，方便核對）
+    const evo = r.leveled_up && r.pet && r.stage_before;
+    inner = `<div class="cele-card${evo ? ' evolving' : ''}" data-cele-student="${r.student_id}">
+      ${evo ? `<div class="evo-stage"><span class="evo-rays"></span>${avatar(st)}${dexImage(r.pet.species_key, r.stage_before, 'evo-old')}<span class="evo-flash"></span></div>` : avatar(st)}
       ${r.pet?.locked ? '<div class="fed-bubble lock">好凍呀…我被冰封咗 🥶</div>' : ''}
       ${!r.pet?.locked && fed.has(r.student_id) ? `<div class="fed-bubble">${r.pet?.stage === 'egg' ? '好暖呀，多謝主人！🥰' : '多謝主人！我食飽喇～😋'}</div>` : ''}
       <div class="who">${esc(r.name)}</div>
@@ -124,7 +130,9 @@ export function celebrate(results, { label, thresholds, quick = false, fed = new
   requestAnimationFrame(() => requestAnimationFrame(() => { const bar = el.querySelector('[data-to]'); if (bar) bar.style.width = bar.dataset.to + '%'; }));
   const close = () => el.remove();
   card.addEventListener('click', close); // 背景不阻擋，老師可即時撳下一位學生
-  setTimeout(close, quick ? (pos.length === 1 ? 1900 : 2600) : (pos.length === 1 ? 2600 : 3200));
+  const evolving = pos.length === 1 && pos[0].leveled_up;
+  if (evolving) el.classList.add('evolve');
+  setTimeout(close, evolving ? 4800 : quick ? (pos.length === 1 ? 1900 : 2600) : (pos.length === 1 ? 2600 : 3200));
 }
 
 // 扣分：簡短的確認畫面（不灑彩紙），寵物照常顯示，不會退化
