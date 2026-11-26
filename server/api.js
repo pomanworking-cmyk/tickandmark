@@ -81,7 +81,9 @@ export function createApi(db) {
     return rows.map(s => ({ ...s, pet: byStudent.get(s.id) || null }));
   };
   const inList = (ids) => ids.map(() => '?').join(',') || 'NULL';
-  const STUDENT_SELECT = `SELECT s.*, (SELECT COALESCE(SUM(cost),0) FROM redemptions r WHERE r.student_id = s.id AND r.undone_at IS NULL) AS spent FROM students s`;
+  const STUDENT_SELECT = `SELECT s.*, (SELECT COALESCE(SUM(cost),0) FROM redemptions r WHERE r.student_id = s.id AND r.undone_at IS NULL) AS spent,
+    (SELECT COUNT(*) FROM pet_collection pc WHERE pc.student_record_id = s.id) AS collected FROM students s`;
+  const COLLECTION_COLS = 'id, student_record_id, species_key, nickname, xp, assigned_at, hatched_at, completed_at';
   // 一次過讀取多位學生及其寵物（減少雲端資料庫來回次數）
   const studentsByIds = async (ids) => {
     if (!ids.length) return new Map();
@@ -99,8 +101,7 @@ export function createApi(db) {
     return m;
   };
   const studentFull = async (id) => {
-    const s = (await db.get(`SELECT s.*, (SELECT COALESCE(SUM(cost),0) FROM redemptions r WHERE r.student_id = s.id AND r.undone_at IS NULL) AS spent
-      FROM students s WHERE s.id = ?`, id));
+    const s = (await db.get(`${STUDENT_SELECT} WHERE s.id = ?`, id));
     return { ...s, pet: await petOf(id) };
   };
 
@@ -319,7 +320,8 @@ export function createApi(db) {
       FROM exams x LEFT JOIN exam_scores es ON es.exam_id = x.id AND es.student_id = ?
       WHERE x.class_id = ? ORDER BY x.exam_date DESC, x.id DESC`, s.id, s.class_id));
     const cls = await own('classes', s.class_id, tid);
-    return { student: await studentFull(s.id), class: cls, events, homework, exams, thresholds: await classThresholds(cls, tid) };
+    const collection = await db.all(`SELECT ${COLLECTION_COLS} FROM pet_collection WHERE student_record_id = ? ORDER BY completed_at, id`, s.id);
+    return { student: await studentFull(s.id), class: cls, events, homework, exams, collection, thresholds: await classThresholds(cls, tid) };
   });
   on('PATCH', '/students/:id', async ({ tid, p, body }) => {
     const s = await own('students', p.id, tid);
@@ -341,7 +343,7 @@ export function createApi(db) {
     return db.tx(() => db.batch([
       [`DELETE FROM pet_xp_ledger WHERE pet_id IN (SELECT id FROM student_pets WHERE student_record_id IN (${L}))`, ...ids],
       [`DELETE FROM pet_xp_ledger WHERE score_event_id IN (SELECT id FROM score_events WHERE student_id IN (${L}))`, ...ids],
-      ...['student_pets:student_record_id', 'score_events:student_id', 'homework_submissions:student_id', 'exam_scores:student_id', 'attendance:student_id', 'redemptions:student_id', 'students:id']
+      ...['pet_collection:student_record_id', 'student_pets:student_record_id', 'score_events:student_id', 'homework_submissions:student_id', 'exam_scores:student_id', 'attendance:student_id', 'redemptions:student_id', 'students:id']
         .map(x => { const [t, c] = x.split(':'); return [`DELETE FROM ${t} WHERE ${c} IN (${L})`, ...ids]; })]));
   };
   on('DELETE', '/students/:id', async ({ tid, p }) => {
@@ -556,6 +558,34 @@ export function createApi(db) {
       const full = await studentsByIds(students.map(s => s.id));
       return { created: students.map(s => full.get(s.id)), skipped: ids.length - students.length };
     });
+  });
+
+  // 培育完成（進化）後：放入寵物庫，並揀下一隻蛋（同一條 StudentPet 紀錄重新開始，派蛋前嘅加分唔計）
+  on('POST', '/pets/:id/next-egg', async ({ tid, p, body }) => {
+    const species = str(body.species_key, 20);
+    if (!SPECIES_KEYS.includes(species)) throw bad('請揀一隻蛋');
+    return db.tx(async () => {
+      const [pr] = await db.batch([[`${PET_SELECT} WHERE p.id = ? AND p.teacher_id = ?`, int(p.id), tid]]);
+      const pet = pr.rows[0]; if (!pet) throw notFound();
+      if (pet.stage !== 'evolved') throw bad('寵物要培育到「進化」先可以放入寵物庫');
+      if (lockOf(pet).locked) throw bad('寵物冰封中，請先解鎖');
+      const t = now();
+      const baseline = (await db.get('SELECT COALESCE(MAX(id), 0) m FROM score_events')).m;
+      await db.batch([
+        ['INSERT INTO pet_collection (teacher_id, student_record_id, species_key, nickname, xp, assigned_at, hatched_at, completed_at) VALUES (?,?,?,?,?,?,?,?)',
+          tid, pet.student_record_id, pet.species_key, pet.nickname, pet.xp, pet.assigned_at, pet.hatched_at, t],
+        // 舊寵物嘅 XP 已存入寵物庫；入帳紀錄清除，新蛋由 0 XP 開始（審核：XP ＝ 入帳總和）
+        ['DELETE FROM pet_xp_ledger WHERE pet_id = ?', pet.id],
+        [`UPDATE student_pets SET species_key = ?, stage = 'egg', xp = 0, baseline_event_id = ?, nickname = NULL, accessories = '[]',
+          assigned_at = ?, hatched_at = NULL, updated_at = ? WHERE id = ?`, species, baseline, t, t, pet.id]]);
+      const collection = await db.all(`SELECT ${COLLECTION_COLS} FROM pet_collection WHERE student_record_id = ? ORDER BY completed_at, id`, pet.student_record_id);
+      return { student: await studentFull(pet.student_record_id), collection };
+    });
+  });
+  on('GET', '/classes/:id/collection', async ({ tid, p }) => {
+    const c = await own('classes', p.id, tid);
+    return await db.all(`SELECT ${COLLECTION_COLS.split(', ').map(x => 'pc.' + x).join(', ')} FROM pet_collection pc JOIN students s ON s.id = pc.student_record_id
+      WHERE s.class_id = ? AND pc.teacher_id = ? ORDER BY pc.completed_at, pc.id`, c.id, tid);
   });
 
   on('PATCH', '/pets/:id', async ({ tid, p, body }) => {

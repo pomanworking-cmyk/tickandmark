@@ -16,7 +16,7 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
 export function createDemoBackend(initial) {
   const S = initial ? clone(initial) : {
     seq: {}, teachers: [], settings: [], classes: [], groups: [], students: [], behavior_tags: [],
-    score_batches: [], score_events: [], student_pets: [], pet_xp_ledger: [], homework: [],
+    score_batches: [], score_events: [], student_pets: [], pet_xp_ledger: [], pet_collection: [], homework: [],
     homework_submissions: [], exams: [], exam_scores: [], homework_templates: [], attendance: [], class_goals: [], rewards: [], redemptions: [],
   };
   const nextId = (t) => S[t].reduce((m, r) => Math.max(m, r.id), 0) + 1; // 與 SQLite rowid 相同：現有最大值 + 1
@@ -43,7 +43,9 @@ export function createDemoBackend(initial) {
     return lockInfo(p, rows, settingsOf(p.teacher_id)?.lock_days ?? DEFAULT_LOCK_DAYS);
   };
   const spentOf = (sid) => S.redemptions.filter(r => r.student_id === sid && !r.undone_at).reduce((a, r) => a + r.cost, 0);
-  const studentFull = (sid) => { const s = S.students.find(s => s.id === sid); return { ...clone(s), spent: spentOf(sid), pet: petOf(sid) }; };
+  const collectionOf = (sid) => clone(S.pet_collection.filter(c => c.student_record_id === sid).sort((a, b) => a.completed_at.localeCompare(b.completed_at) || a.id - b.id)
+    .map(({ id, student_record_id, species_key, nickname, xp, assigned_at, hatched_at, completed_at }) => ({ id, student_record_id, species_key, nickname, xp, assigned_at, hatched_at, completed_at })));
+  const studentFull = (sid) => { const s = S.students.find(s => s.id === sid); return { ...clone(s), spent: spentOf(sid), collected: S.pet_collection.filter(c => c.student_record_id === sid).length, pet: petOf(sid) }; };
   const sortStudents = (a, b) => (a.number == null) - (b.number == null) || (a.number ?? 0) - (b.number ?? 0) || a.id - b.id;
   const studentsOf = (cid) => S.students.filter(s => s.class_id === cid).sort(sortStudents).map(s => studentFull(s.id));
   const tagOf = (id) => S.behavior_tags.find(t => t.id === id);
@@ -240,7 +242,7 @@ export function createDemoBackend(initial) {
     const exams = S.exams.filter(x => x.class_id === s.class_id).sort((a, b) => b.exam_date.localeCompare(a.exam_date) || b.id - a.id)
       .map(x => ({ id: x.id, title: x.title, subject: x.subject, full_mark: x.full_mark, exam_date: x.exam_date, score: S.exam_scores.find(e => e.exam_id === x.id && e.student_id === s.id)?.score ?? null }));
     const cls = own('classes', s.class_id, tid);
-    return { student: studentFull(s.id), class: clone(cls), events, homework, exams, thresholds: classThresholds(cls, tid) };
+    return { student: studentFull(s.id), class: clone(cls), events, homework, exams, collection: collectionOf(s.id), thresholds: classThresholds(cls, tid) };
   });
   on('PATCH', '/students/:id', ({ tid, p, body }) => {
     const s = own('students', p.id, tid);
@@ -252,7 +254,7 @@ export function createDemoBackend(initial) {
     Object.assign(s, { name, number, group_id: group }); return studentFull(s.id);
   });
   const removeStudent = (id) => {
-    S.students = S.students.filter(s => s.id !== id);
+    S.students = S.students.filter(s => s.id !== id); S.pet_collection = S.pet_collection.filter(c => c.student_record_id !== id);
     const pet = S.student_pets.find(x => x.student_record_id === id);
     S.student_pets = S.student_pets.filter(x => x !== pet); S.score_events = S.score_events.filter(e => e.student_id !== id);
     S.redemptions = S.redemptions.filter(r => r.student_id !== id); S.attendance = S.attendance.filter(a => a.student_id !== id);
@@ -382,6 +384,24 @@ export function createDemoBackend(initial) {
     if (body.nickname !== undefined) pet.nickname = str(body.nickname, 12) || null;
     if (body.accessories !== undefined) { if (!Array.isArray(body.accessories)) throw bad('飾物格式錯誤'); pet.accessories = body.accessories.slice(0, 10).map(x => str(x, 30)); }
     pet.updated_at = now(); return studentFull(pet.student_record_id);
+  });
+  on('POST', '/pets/:id/next-egg', ({ tid, p, body }) => {
+    const species = str(body.species_key, 20); if (!SPECIES_KEYS.includes(species)) throw bad('請揀一隻蛋');
+    return txn(() => {
+      const pet = own('student_pets', p.id, tid);
+      if (pet.stage !== 'evolved') throw bad('寵物要培育到「進化」先可以放入寵物庫');
+      if (lockOf(pet).locked) throw bad('寵物冰封中，請先解鎖');
+      const t = now();
+      insert('pet_collection', { teacher_id: tid, student_record_id: pet.student_record_id, species_key: pet.species_key, nickname: pet.nickname ?? null, xp: pet.xp,
+        assigned_at: pet.assigned_at ?? null, hatched_at: pet.hatched_at ?? null, completed_at: t });
+      S.pet_xp_ledger = S.pet_xp_ledger.filter(l => l.pet_id !== pet.id);
+      Object.assign(pet, { species_key: species, stage: 'egg', xp: 0, baseline_event_id: Math.max(0, ...S.score_events.map(e => e.id)), nickname: null, accessories: [], assigned_at: t, hatched_at: null, updated_at: t });
+      return { student: studentFull(pet.student_record_id), collection: collectionOf(pet.student_record_id) };
+    });
+  });
+  on('GET', '/classes/:id/collection', ({ tid, p }) => {
+    const c = own('classes', p.id, tid); const ids = new Set(S.students.filter(s => s.class_id === c.id).map(s => s.id));
+    return [...ids].flatMap(collectionOf).sort((a, b) => a.completed_at.localeCompare(b.completed_at) || a.id - b.id);
   });
   on('POST', '/pets/:id/unlock', ({ tid, p }) => { const pet = own('student_pets', p.id, tid); pet.unlocked_at = now(); pet.updated_at = now(); return studentFull(pet.student_record_id); });
   on('DELETE', '/pets/:id', ({ tid, p }) => { own('student_pets', p.id, tid); S.student_pets = S.student_pets.filter(x => x.id !== p.id); S.pet_xp_ledger = S.pet_xp_ledger.filter(l => l.pet_id !== p.id); return { ok: true }; });

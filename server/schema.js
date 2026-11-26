@@ -114,6 +114,21 @@ CREATE TABLE IF NOT EXISTS student_pets (
   updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+-- 寵物庫：培育完成（進化）後放入寵物庫，學生再揀下一隻蛋
+CREATE TABLE IF NOT EXISTS pet_collection (
+  id                INTEGER PRIMARY KEY,
+  teacher_id        INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+  student_record_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  species_key       TEXT NOT NULL CHECK (species_key IN
+                      ('fire_fox','metal_cat','wood_deer','water_otter','earth_bear','metal_bird','wood_rabbit','water_koi')),
+  nickname          TEXT,
+  xp                INTEGER NOT NULL DEFAULT 0,
+  assigned_at       TEXT,
+  hatched_at        TEXT,
+  completed_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_collection_student ON pet_collection(student_record_id);
+
 -- 寵物 XP 入帳紀錄：score_event_id 為主鍵，同一筆加分永遠只能入帳一次
 CREATE TABLE IF NOT EXISTS pet_xp_ledger (
   score_event_id INTEGER PRIMARY KEY REFERENCES score_events(id) ON DELETE CASCADE,

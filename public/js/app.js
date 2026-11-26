@@ -140,7 +140,8 @@ function petBubble(s) {
   const hunger = lv ? (lv === 2 ? '幫幫我！' : s.pet.stage === 'egg' ? '好凍～' : '肚餓～') : '';
   if (hw && lv) return `<span class="hungry-bubble hw swap"><span class="a">${hwText}</span><span class="b">${hunger}</span></span>`;
   if (hw) return `<span class="hungry-bubble hw">${hwText}</span>`;
-  return lv ? hungerBubble(s) : '';
+  if (lv) return hungerBubble(s);
+  return s.pet.stage === 'evolved' ? '<span class="hungry-bubble done">✨ 揀新蛋</span>' : '';
 }
 // 操作完成時老師可能已轉咗頁／轉咗班：只更新仍然是同一班的資料，亦唔好畫返舊頁面
 async function reloadClass() { const id = state.classId; if (!id) return; const full = await GET(`/classes/${id}/full`); if (state.classId === id) state.cls = full; }
@@ -229,6 +230,8 @@ async function givePoints(ids, { delta, tag, reason, quick = false }) {
   const remind = new Map(res.results.map(r => [r.student_id, homeworkMessage({ id: r.student_id, pet: r.pet }, state.missing.get(r.student_id) || [])]).filter(([, m]) => m));
   celebrate(res.results, { label, thresholds: thresholds(), quick, fed, remind });
   if (fed.size) drawHungryPill();
+  const done = res.results.filter(r => r.leveled_up && r.stage_after === 'evolved');
+  if (done.length === 1) { const st = students().find(x => x.id === done[0].student_id); if (st) setTimeout(() => toast(`🎉 ${st.name} 嘅寵物培育完成！`, { action: () => nextEggFlow(st), actionLabel: '揀下一隻蛋', ms: 6000 }), 2600); }
   const names = res.results.length > 3 ? `${res.results.length} 位同學` : res.results.map(r => r.name).join('、');
   toast(`${names} ${signed(d)}（${label}）`, { action: () => undoBatch(res.batch_id), actionLabel: '撤銷' });
   refreshGoal().catch(() => {}); // 加分令能量瓶上升，扣分令佢下降
@@ -253,6 +256,7 @@ function pointSheet(ids) {
         <div class="muted small">${list.length === 1 ? `${list[0].number ?? ''}號 · 現有 <b class="num">${list[0].score}</b> 分 · ${esc(petStatus(list[0].pet, thresholds()))}` : esc(list.map(s => s.name).join('、'))}</div></div>
       <button class="btn ghost" data-close aria-label="關閉">✕</button>
     </div>
+    ${list.length === 1 && list[0].pet?.stage === 'evolved' && !list[0].pet.locked ? `<div class="done-banner"><span>🎉 寵物已經培育到「進化」！可以放入寵物庫，再揀下一隻蛋。</span><button class="btn sm primary" data-nextegg>揀下一隻蛋</button></div>` : ''}
     ${list.length === 1 && list[0].pet?.locked ? `<div class="lock-banner"><span>🔒 寵物冰封中（欠交：${esc(list[0].pet.lock_titles.join('、'))}）。分數照加，但寵物唔會長大。</span><button class="btn sm primary" data-unlock>問問題解鎖</button></div>` : ''}
     <div class="section-label">行為標籤</div>
     <div class="tag-grid">${tags.map(t => `<button class="tag-btn ${t.points > 0 ? 'pos' : 'neg'}" data-tag="${t.id}"><span class="ic">${esc(t.icon)}</span><span>${esc(t.label)}</span><span class="pt">${signed(t.points)}</span></button>`).join('')}</div>
@@ -272,6 +276,7 @@ function pointSheet(ids) {
     const q = e.target.closest('[data-d]'); if (q) return done({ delta: Number(q.dataset.d) });
     if (e.target.closest('[data-redeem]')) { d.close(); openRewards(ids[0]); }
     if (e.target.closest('[data-unlock]')) { d.close(); unlockFlow(list[0]); }
+    if (e.target.closest('[data-nextegg]')) { d.close(); nextEggFlow(list[0]); }
   });
   d.querySelector('[data-custom]').addEventListener('submit', (e) => {
     e.preventDefault(); const fd = new FormData(e.target);
@@ -636,7 +641,7 @@ function stuCard(s, rc) {
   const badge = absent ? '<span class="ribbon absent">缺席</span>' : hw ? `<span class="ribbon hw-${hw}">${HW_LABEL[hw]}</span>` : '';
   return `<div class="${cls}" role="button" tabindex="0" data-act="stu" data-id="${s.id}"${rc ? ` data-r="${rc[0]}" data-c="${rc[1]}"` : ''} ${g ? `style="--gc:${esc(g.color)}"` : ''} aria-label="${esc(s.name)}，${s.score} 分">
     <span class="no">${s.number ?? ''}</span><span class="sc${s.score < 0 ? ' neg' : ''}">${s.score}</span>
-    ${petBubble(s)}${avatar(s)}<span class="nm">${esc(s.name)}</span>${g ? '<span class="gbar"></span>' : ''}${badge}</div>`;
+    ${petBubble(s)}${avatar(s)}${s.collected ? `<span class="coll-badge" title="寵物庫 ${s.collected} 隻">🏆${s.collected}</span>` : ''}<span class="nm">${esc(s.name)}</span>${g ? '<span class="gbar"></span>' : ''}${badge}</div>`;
 }
 function drawRoomGrid() {
   const grid = $('#room-grid'); if (!grid) return;
@@ -1477,13 +1482,23 @@ function renderPets() {
       <button class="btn primary" data-act="assign" style="margin-top:12px">派蛋給已選學生</button></section>` : ''}
     <section class="panel"><h2>全班寵物</h2>
       <div class="pet-list">${list.filter(s => s.pet).map(s => `<a class="pet-item" href="#/s/${s.id}">${avatar(s)}<span class="info"><b>${s.number ?? ''} ${esc(s.name)}</b>
-        <span class="small muted">${esc(petLabel(s.pet))}${s.pet.nickname ? `「${esc(s.pet.nickname)}」` : ''} · XP ${s.pet.xp}${hungerOf(s) ? ` · <span class="${hungerOf(s) === 2 ? 'hungry-text2' : 'hungry-text'}">${hungerOf(s) === 2 ? '好肚餓' : '肚餓'}</span>` : ''}</span>${xpBar(s.pet, th)}</span></a>`).join('') || '<div class="empty">未有學生獲派蛋</div>'}</div></section>
+        <span class="small muted">${esc(petLabel(s.pet))}${s.pet.nickname ? `「${esc(s.pet.nickname)}」` : ''} · XP ${s.pet.xp}${s.collected ? ` · 🏆${s.collected}` : ''}${hungerOf(s) ? ` · <span class="${hungerOf(s) === 2 ? 'hungry-text2' : 'hungry-text'}">${hungerOf(s) === 2 ? '好肚餓' : '肚餓'}</span>` : ''}</span>${xpBar(s.pet, th)}</span></a>`).join('') || '<div class="empty">未有學生獲派蛋</div>'}</div></section>
+    ${list.some(s => s.collected) ? `<section class="panel"><h2>🏆 全班寵物庫</h2><p class="muted small" style="margin-top:0">培育到「進化」之後放入寵物庫嘅寵物。</p><div id="coll-board" class="coll-board"><div class="muted small">載入中…</div></div></section>` : ''}
     <section class="panel"><h2>寵物圖鑑</h2><p class="muted small">數字是本班處於該階段的寵物數目。</p>
       <div class="dex">${SPECIES.map(sp => `<div class="dex-row"><div class="sp">${esc(sp.name)}<small>${sp.element}屬性</small></div>
         ${STAGES.map(st => `<div class="dex-cell">${dexImage(sp.key, st)}<div>${STAGE_LABELS[st]} <b>${counts[`${sp.key}/${st}`] || 0}</b></div></div>`).join('')}</div>`).join('')}</div></section>`);
   const pickBox = $('#sp-pick');
   if (pickBox) pickBox.onclick = (e) => { const b = e.target.closest('[data-sp]'); if (!b) return; pick = b.dataset.sp; $$('[data-sp]', pickBox).forEach(x => x.setAttribute('aria-pressed', x === b)); };
   ACT.classth = () => classThresholdDialog();
+  if ($('#coll-board')) {
+    const t = navSeq;
+    GET(`/classes/${state.classId}/collection`).then(rows => {
+      if (t !== navSeq || !here('pets') || !$('#coll-board')) return;
+      const by = new Map(); rows.forEach(r => { if (!by.has(r.student_record_id)) by.set(r.student_record_id, []); by.get(r.student_record_id).push(r); });
+      const ranked = list.filter(s => by.has(s.id)).sort((a, b) => by.get(b.id).length - by.get(a.id).length || byNumber(a, b));
+      $('#coll-board').innerHTML = ranked.map(s => `<a class="coll-row" href="#/s/${s.id}"><b>${s.number ?? ''} ${esc(s.name)}</b><span class="coll-mini">${by.get(s.id).map(c => dexImage(c.species_key, 'evolved')).join('')}</span><span class="num">🏆${by.get(s.id).length}</span></a>`).join('');
+    }).catch(() => {});
+  }
   ACT.selall = () => $$('[data-np]').forEach(c => { c.checked = true; });
   ACT.selnone = () => $$('[data-np]').forEach(c => { c.checked = false; });
   ACT.assign = async () => {
@@ -1491,6 +1506,43 @@ function renderPets() {
     if (!ids.length) return toast('請先選擇學生', { error: true });
     const r = await POST('/pets/assign', { student_ids: ids, species_key: pick });
     await reloadClass(); await reloadBoot(); toast(`已為 ${r.created.length} 位學生派蛋`); renderPets();
+  };
+}
+
+// ---------- 寵物庫：培育完成嘅寵物放入寵物庫，再揀下一隻蛋 ----------
+function collectionPanel(s, coll) {
+  const have = new Set(coll.map(c => c.species_key));
+  return `<section class="panel coll-panel"><h2>🏆 ${esc(s.name)} 嘅寵物庫 <span class="muted small">${coll.length} 隻 · 已收集 ${have.size}／${SPECIES.length} 個品種</span></h2>
+    <div class="coll-dex" aria-label="品種收集進度">${SPECIES.map(sp => `<div class="cd ${have.has(sp.key) ? 'got' : 'miss'}" title="${esc(sp.name)}${have.has(sp.key) ? '（已收集）' : '（未收集）'}">${dexImage(sp.key, have.has(sp.key) ? 'evolved' : 'egg')}<span>${have.has(sp.key) ? esc(sp.name) : '？'}</span></div>`).join('')}</div>
+    ${coll.length ? `<div class="coll-shelf">${coll.map(c => `<div class="coll-item">${dexImage(c.species_key, 'evolved')}<b>${esc(c.nickname || speciesByKey[c.species_key].name)}</b><span class="muted small">${fmtDate(c.completed_at)} 完成 · ${c.xp} XP</span></div>`).join('')}</div>`
+      : '<p class="muted small" style="margin:8px 0 0">培育到「進化」嘅寵物會放入呢度，然後可以揀下一隻蛋，慢慢集齊 8 個品種！</p>'}
+  </section>`;
+}
+async function nextEggFlow(s, after, coll) {
+  if (!s?.pet) return;
+  if (!coll) { try { coll = (await GET(`/students/${s.id}`)).collection; } catch (err) { return fail(err); } }
+  const have = new Set(coll.map(c => c.species_key)); have.add(s.pet.species_key);
+  let pick = null;
+  const d = openDialog(`<div class="sheet-head"><h2>🥚 揀下一隻蛋</h2><button class="btn ghost" data-close>✕</button></div>
+    <div class="nextegg">
+      <div class="ne-done">${avatar(s, 96)}<div><b>${esc(s.name)} 嘅「${esc(s.pet.nickname || speciesByKey[s.pet.species_key].name)}」培育完成！</b><div class="muted small">佢會放入寵物庫（而家已有 ${coll.length} 隻），總分保持不變。新蛋由 0 XP 開始。</div></div></div>
+      <div class="ne-grid">${SPECIES.map(sp => `<button class="ne-egg" data-sp="${sp.key}" aria-pressed="false">${dexImage(sp.key, 'egg')}<b>${esc(sp.name)}蛋</b>${have.has(sp.key) ? '<span class="tag got">✓ 已收集</span>' : '<span class="tag new">✨ 新品種</span>'}</button>`).join('')}</div>
+      <div class="row" style="justify-content:center"><button class="btn" data-close>稍後再揀</button><button class="btn primary" id="ne-ok" disabled>放入寵物庫・開始孵化新蛋 🥚</button></div>
+    </div>`, { full: true });
+  d.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-sp]'); if (!b) return;
+    pick = b.dataset.sp; d.querySelectorAll('[data-sp]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    $('#ne-ok', d).disabled = false; $('#ne-ok', d).textContent = `放入寵物庫・開始孵化${speciesByKey[pick].name}蛋 🥚`;
+  });
+  $('#ne-ok', d).onclick = async (e) => {
+    e.target.disabled = true;
+    try {
+      const r = await POST(`/pets/${s.pet.id}/next-egg`, { species_key: pick });
+      const st = students().find(x => x.id === s.id); if (st) { st.pet = r.student.pet; st.collected = r.student.collected; }
+      $('.nextegg', d).innerHTML = `<div class="ne-success"><div class="ne-trophy">🏆</div><div class="ne-pair">${dexImage(r.collection[r.collection.length - 1].species_key, 'evolved', 'ne-old')}<span class="ne-arrow">➜</span>${avatar(r.student, 120)}</div>
+        <b>已放入寵物庫（共 ${r.collection.length} 隻）！</b><div class="muted">新嘅${esc(speciesByKey[pick].name)}蛋等緊你孵化 ✨</div></div>`;
+      setTimeout(() => { d.close(); if ($('#room-grid')) drawRoomGrid(); after?.(); }, 2200);
+    } catch (err) { e.target.disabled = false; fail(err); }
   };
 }
 
@@ -1609,10 +1661,11 @@ async function renderStudent(id) {
           <div style="display:flex;justify-content:space-between" class="small"><span>XP <b class="num">${pet.xp}</b></span><span>${p.next ? `再 ${p.remaining} XP ${pet.stage === 'egg' ? '孵化' : '成為' + STAGE_LABELS[p.next]}` : '已完全進化'}</span></div>
           ${xpBar(pet, th)}
           <div class="timeline">${STAGES.map((st, i) => `<div class="${i <= STAGES.indexOf(pet.stage) ? '' : 'locked'} ${st === pet.stage ? 'cur' : ''}">${dexImage(pet.species_key, st)}<div class="t">${STAGE_LABELS[st]}</div></div>`).join('')}</div>
-          <div class="row" style="justify-content:center">${pet.locked ? '<button class="btn sm primary" data-act="unlock">🔓 問問題解鎖</button>' : ''}<button class="btn sm" data-act="rename">改名</button>${pet.stage === 'egg' ? '<button class="btn sm" data-act="swap">更換蛋</button>' : ''}</div>`
+          <div class="row" style="justify-content:center">${pet.locked ? '<button class="btn sm primary" data-act="unlock">🔓 問問題解鎖</button>' : ''}${pet.stage === 'evolved' && !pet.locked ? '<button class="btn sm primary" data-act="nextegg">🏆 放入寵物庫・揀下一隻蛋</button>' : ''}<button class="btn sm" data-act="rename">改名</button>${pet.stage === 'egg' ? '<button class="btn sm" data-act="swap">更換蛋</button>' : ''}</div>`
         : `<h2>未派蛋</h2><p class="muted small">到「寵物」頁為這位學生派蛋。派蛋之後的加分才會成為 XP。</p><a class="btn" href="#/c/${d.class.id}/pets">去派蛋</a>`}
       </section>
       <div class="stack">
+        ${pet || d.collection.length ? collectionPanel(s, d.collection) : ''}
         <section class="panel"><h2>功課</h2>
           <div class="row">${HW_STATUS.map(([k, l]) => `<span class="chip">${l} <b class="num">${hwCount(k)}</b></span>`).join('')}<span class="chip">共 <b class="num">${d.homework.length}</b> 份</span></div>
           ${d.homework.filter(h => h.status === 'missing' || h.status === 'late').length ? `<p class="small" style="margin-bottom:0">需要跟進：${d.homework.filter(h => h.status === 'missing' || h.status === 'late').map(h => `${esc(h.title)}（${HW_STATUS.find(x => x[0] === h.status)[1]}）`).join('、')}</p>` : ''}</section>
@@ -1630,6 +1683,7 @@ async function renderStudent(id) {
     obs.observe(document.body, { childList: true });
   };
   ACT.unlock = () => unlockFlow(s, () => renderStudent(id).catch(fail));
+  ACT.nextegg = () => nextEggFlow(s, () => renderStudent(id).catch(fail), d.collection);
   ACT.rename = () => editDialog('寵物名字（最多 12 字，留空即取消）', pet.nickname || '', async (v) => { await PATCH(`/pets/${pet.id}`, { nickname: v }); await reloadClass(); renderStudent(id); });
   ACT.swap = () => {
     const dd = openDialog(`<div class="sheet-head"><h2>更換蛋（未孵化才可更換）</h2><button class="btn ghost" data-close>✕</button></div>

@@ -528,6 +528,31 @@ try:
         page.click('[data-act=classth]'); page.click('dialog [data-reset]'); page.wait_for_selector('text=已跟返預設門檻')
         check('每班門檻：可以跟返預設', api(page, 'GET', f"/classes/{ids['6C']}/full")['class']['thresholds'] is None)
 
+        # 寵物庫：培育到進化之後放入寵物庫，再揀下一隻蛋
+        a4b = api(page, 'GET', f"/classes/{ids['4B']}/full")['students']
+        ev = next(x for x in a4b if x['pet'] and not x['pet']['locked'] and x['pet']['species_key'] != 'water_koi')
+        api(page, 'POST', '/points', {'class_id': ids['4B'], 'student_ids': [ev['id']], 'delta': 100, 'client_batch_id': 'evolve-1'})
+        api(page, 'POST', '/points', {'class_id': ids['4B'], 'student_ids': [ev['id']], 'delta': 100, 'client_batch_id': 'evolve-2'})
+        goto(page, BASE + '#/classes'); goto(page, BASE + f"#/c/{ids['4B']}/room"); page.wait_for_selector(f'.stu[data-id="{ev["id"]}"]')
+        check('寵物庫：進化咗嘅寵物顯示「揀新蛋」', page.locator(f'.stu[data-id="{ev["id"]}"] .hungry-bubble.done').count() == 1)
+        if page.locator('.qchip[data-q="menu"]').count(): page.click('.qchip[data-q="menu"]')
+        page.click(f'.stu[data-id="{ev["id"]}"]', position={'x': 20, 'y': 12}); page.wait_for_selector('dialog .done-banner')
+        page.click('dialog [data-nextegg]'); page.wait_for_selector('.ne-egg')
+        check('寵物庫：揀蛋畫面有 8 隻蛋，標示已收集／新品種', page.locator('.ne-egg').count() == 8 and page.locator('.ne-egg .tag.got').count() >= 1)
+        page.click('.ne-egg[data-sp="water_koi"]'); page.screenshot(path=f'{OUT}/next-egg.png')
+        page.click('#ne-ok'); page.wait_for_selector('text=已放入寵物庫'); page.wait_for_timeout(2500)
+        ev2 = api(page, 'GET', f"/students/{ev['id']}")
+        check('寵物庫：舊寵物入庫，新蛋由 0 XP 開始', ev2['student']['collected'] == 1 and ev2['student']['pet']['species_key'] == 'water_koi' and ev2['student']['pet']['stage'] == 'egg'
+              and ev2['student']['pet']['xp'] == 0 and ev2['collection'][0]['species_key'] == ev['pet']['species_key'], str(ev2['student']['pet']))
+        check('寵物庫：課室學生卡顯示 🏆1，新蛋圖片正確', page.locator(f'.stu[data-id="{ev["id"]}"] .coll-badge').inner_text() == '🏆1'
+              and page.locator(f'.stu[data-id="{ev["id"]}"] .avatar[data-species="water_koi"][data-stage="egg"]').count() == 1)
+        goto(page, BASE + f"#/s/{ev['id']}"); page.wait_for_selector('.coll-panel')
+        check('寵物庫：學生頁顯示寵物庫及品種收集進度', page.locator('.coll-item').count() == 1 and page.locator('.coll-dex .cd.got').count() == 1)
+        page.screenshot(path=f'{OUT}/collection-student.png', full_page=True)
+        goto(page, BASE + f"#/c/{ids['4B']}/pets"); page.wait_for_selector('.coll-row')
+        check('寵物庫：寵物頁顯示全班寵物庫', page.locator('.coll-row').count() == 1)
+        check('寵物庫：資料一致性檢查無問題', api(page, 'GET', '/audit')['problems'] == [])
+
         # 私隱：另一位老師
         other = br.new_context().new_page(); other.goto(BASE)
         other.evaluate("fetch('/api/auth/register', { method: 'POST', headers: { 'content-type': 'application/json', 'x-tm': '1' }, body: JSON.stringify({ email: 'lee@school.edu.hk', name: '李老師', password: 'Password123' }) })")

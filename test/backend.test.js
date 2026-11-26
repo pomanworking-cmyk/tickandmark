@@ -585,3 +585,63 @@ test('每班可以自訂寵物升級門檻（伺服器與示範後端一致）',
   assert.deepEqual(s.audit, []);
   assert.deepEqual(d, s, '示範後端與伺服器結果一致');
 });
+
+test('寵物庫：進化後放入寵物庫，再揀下一隻蛋（伺服器與示範後端一致）', async () => {
+  const { openSqlite } = await import('../server/db-sqlite.js');
+  const { createApp } = await import('../server/app.js');
+  const server = () => {
+    const db = openSqlite(':memory:'); const app = createApp({ db, allowRegistration: true }); let cookie = '';
+    return async (method, path, body) => {
+      const r = await app({ method, path, query: {}, headers: { 'x-tm': '1', cookie }, bodyText: body ? JSON.stringify(body) : '', ip: '1' });
+      const sc = r.headers['Set-Cookie']; if (sc) cookie = sc.split(';')[0];
+      if (r.status >= 400) { const e = new Error(r.body.error); e.status = r.status; throw e; }
+      return r.body;
+    };
+  };
+  const demo = () => { const be = createDemoBackend(); return (m, p, b) => be.request(m, p, b); };
+  const strip = (x) => JSON.parse(JSON.stringify(x, (k, v) => (/_at$/.test(k) ? (v ? 'T' : v) : v)));
+  const run = async (call) => {
+    const out = {};
+    await call('POST', '/auth/register', { email: 'c@x.hk', name: 'C', password: 'Password123' });
+    const c = await call('POST', '/classes', { name: '3B' });
+    const [a, b] = (await call('POST', `/classes/${c.id}/students`, { students: [{ name: 'A' }, { name: 'B' }] })).created;
+    await call('POST', '/pets/assign', { student_ids: [a.id, b.id], species_key: 'fire_fox' });
+    const pa = (await call('GET', `/students/${a.id}`)).student.pet;
+    await assert.rejects(call('POST', `/pets/${pa.id}/next-egg`, { species_key: 'water_koi' }), /進化/);
+    const r1 = await call('POST', '/points', { class_id: c.id, student_ids: [a.id], delta: 100, client_batch_id: 'big' });
+    out.evolved = r1.results[0].stage_after;
+    await assert.rejects(call('POST', `/pets/${pa.id}/next-egg`, { species_key: 'dragon' }), /揀一隻蛋/);
+    const n = await call('POST', `/pets/${pa.id}/next-egg`, { species_key: 'water_koi' });
+    out.newPet = { id: n.student.pet.id === pa.id, species: n.student.pet.species_key, stage: n.student.pet.stage, xp: n.student.pet.xp, collected: n.student.collected };
+    out.collection = strip(n.collection);
+    out.score = n.student.score; // 總分唔變
+    // 派新蛋之前嘅加分唔計入新蛋；之後嘅加分先計
+    const r2 = await call('POST', '/points', { class_id: c.id, student_ids: [a.id], delta: 6, client_batch_id: 'after' });
+    out.after = [r2.results[0].xp_gained, r2.results[0].pet.xp, r2.results[0].pet.stage];
+    // 撤銷派新蛋之前嗰次加分：分數扣返，但寵物庫同新蛋唔受影響
+    const u = await call('POST', `/batches/${r1.batch_id}/undo`);
+    out.undo = [u.results[0].score, u.results[0].pet.xp, u.results[0].pet.species_key];
+    const st = await call('GET', `/students/${a.id}`);
+    out.page = { collected: st.student.collected, collection: strip(st.collection).map(x => x.species_key) };
+    out.classColl = strip(await call('GET', `/classes/${c.id}/collection`)).map(x => [x.student_record_id === a.id, x.species_key, x.xp]);
+    out.full = (await call('GET', `/classes/${c.id}/full`)).students.map(s => [s.name, s.collected, s.pet.species_key]);
+    out.audit = (await call('GET', '/audit')).problems;
+    // 刪除學生：寵物庫一併刪除
+    await call('DELETE', `/students/${a.id}`);
+    out.afterDelete = (await call('GET', `/classes/${c.id}/collection`)).length;
+    return out;
+  };
+  const s = await run(server()); const d = await run(demo());
+  assert.equal(s.evolved, 'evolved');
+  assert.deepEqual(s.newPet, { id: true, species: 'water_koi', stage: 'egg', xp: 0, collected: 1 });
+  assert.deepEqual(s.collection.map(x => [x.species_key, x.xp]), [['fire_fox', 100]]);
+  assert.equal(s.score, 100);
+  assert.deepEqual(s.after, [6, 6, 'baby']);
+  assert.deepEqual(s.undo, [6, 6, 'water_koi']);
+  assert.deepEqual(s.page, { collected: 1, collection: ['fire_fox'] });
+  assert.deepEqual(s.classColl, [[true, 'fire_fox', 100]]);
+  assert.deepEqual(s.full, [['A', 1, 'water_koi'], ['B', 0, 'fire_fox']]);
+  assert.deepEqual(s.audit, []);
+  assert.equal(s.afterDelete, 0);
+  assert.deepEqual(d, s, '示範後端與伺服器結果一致');
+});
